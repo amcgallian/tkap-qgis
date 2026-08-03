@@ -1,0 +1,249 @@
+/* TKAP Tools documentation.
+   Warm paper, ochre-to-umber accents taken from the plugin icons, and a serif
+   display face so it reads like project documentation rather than a template. */
+
+:root {
+  color-scheme: light dark;
+
+  --ink: #24201a;
+  --paper: #faf7f1;
+  --muted: #6f685c;
+  --line: #e2dbcd;
+  --rule: #cfc4ae;
+  --code-bg: #f2ede2;
+  --panel: #f5f1e7;
+
+  --ochre: #c8a165;
+  --umber: #8a5f34;
+  --bark: #5a3a22;
+  --accent: #8a5f34;
+
+  --mark-invert: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #ece7dc;
+    --paper: #14120e;
+    --muted: #9a9285;
+    --line: #2c2820;
+    --rule: #3a3428;
+    --code-bg: #1d1a14;
+    --panel: #1a1712;
+
+    --accent: #c8a165;
+    --mark-invert: 1;
+  }
+}
+
+:root[data-theme="light"] {
+  --ink: #24201a; --paper: #faf7f1; --muted: #6f685c; --line: #e2dbcd;
+  --rule: #cfc4ae; --code-bg: #f2ede2; --panel: #f5f1e7;
+  --accent: #8a5f34; --mark-invert: 0;
+}
+:root[data-theme="dark"] {
+  --ink: #ece7dc; --paper: #14120e; --muted: #9a9285; --line: #2c2820;
+  --rule: #3a3428; --code-bg: #1d1a14; --panel: #1a1712;
+  --accent: #c8a165; --mark-invert: 1;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 0 1.25rem 5rem;
+  font: 16px/1.7 -apple-system, "Segoe UI", system-ui, sans-serif;
+  color: var(--ink);
+  background: var(--paper);
+  -webkit-text-size-adjust: 100%;
+}
+
+.wrap { max-width: 45rem; margin: 0 auto; }
+
+/* ---------------------------------------------------------------- header -- */
+
+header { max-width: 45rem; margin: 0 auto; padding: 2.25rem 0 0; }
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: .7rem;
+  text-decoration: none;
+  color: inherit;
+  margin-bottom: 1.5rem;
+}
+.brand img {
+  width: 34px;
+  height: 32px;
+  object-fit: contain;
+  /* The mark is near-black artwork on transparency, so dark mode needs it
+     flipped rather than a second file. */
+  filter: invert(var(--mark-invert));
+}
+.brand-text { display: flex; flex-direction: column; line-height: 1.25; }
+.brand-name {
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  font-size: 1.15rem;
+  font-weight: 600;
+  letter-spacing: -.01em;
+}
+.brand-sub { font-size: .74rem; color: var(--muted); letter-spacing: .09em; text-transform: uppercase; }
+
+/* the strata rule: the icon's ramp, flattened into a divider */
+.strata { display: flex; height: 3px; border-radius: 2px; overflow: hidden; margin-bottom: 1.75rem; }
+.strata i { display: block; height: 100%; }
+.strata i:nth-child(1) { flex: 3; background: var(--ochre); }
+.strata i:nth-child(2) { flex: 2; background: #a87c4a; }
+.strata i:nth-child(3) { flex: 4; background: var(--umber); }
+.strata i:nth-child(4) { flex: 2; background: var(--bark); }
+
+nav.tabs { display: flex; flex-wrap: wrap; gap: .15rem; border-bottom: 1px solid var(--line); margin-bottom: 2.5rem; }
+nav.tabs a {
+  padding: .55rem .9rem;
+  text-decoration: none;
+  color: var(--muted);
+  font-size: .92rem;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  white-space: nowrap;
+}
+nav.tabs a:hover { color: var(--ink); }
+nav.tabs a[aria-current="page"] { color: var(--ink); font-weight: 600; border-bottom-color: var(--accent); }
+
+/* ------------------------------------------------------------------ type -- */
+
+main { max-width: 45rem; margin: 0 auto; }
+
+h1, h2, h3 {
+  font-family: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  letter-spacing: -.015em;
+}
+h1 { font-size: 2.1rem; line-height: 1.15; margin: 0 0 .5rem; font-weight: 600; }
+.lede { color: var(--muted); margin: 0 0 2.5rem; font-size: 1.1rem; line-height: 1.55; max-width: 38rem; }
+
+h2 {
+  font-size: 1.3rem;
+  font-weight: 600;
+  margin: 3rem 0 .9rem;
+  padding-top: 1.6rem;
+  border-top: 1px solid var(--line);
+}
+h3 { font-size: 1.03rem; font-weight: 600; margin: 1.9rem 0 .45rem; }
+
+p, li { overflow-wrap: break-word; }
+ul, ol { padding-left: 1.35rem; }
+li { margin: .35rem 0; }
+li > ul, li > ol { margin: .35rem 0; }
+
+a { color: inherit; text-decoration-color: var(--accent); text-underline-offset: 3px; }
+a:hover { text-decoration-color: var(--ink); }
+
+code {
+  background: var(--code-bg);
+  padding: .14em .38em;
+  border-radius: 3px;
+  font-size: .86em;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+}
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: .9rem 1.05rem;
+  overflow-x: auto;
+  font-size: .86rem;
+  line-height: 1.6;
+}
+pre code { background: none; padding: 0; font-size: inherit; }
+
+.url {
+  display: block;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 5px 5px 0;
+  padding: .8rem 1rem;
+  margin: 1.1rem 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: .86rem;
+}
+
+/* ---------------------------------------------------------------- blocks -- */
+
+.table-wrap { overflow-x: auto; margin: 1.2rem 0; }
+table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+th, td { text-align: left; padding: .55rem .7rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+th {
+  font-size: .74rem;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--muted);
+  font-weight: 600;
+  white-space: nowrap;
+  border-bottom-color: var(--rule);
+}
+
+.note {
+  background: var(--panel);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 5px 5px 0;
+  padding: .85rem 1.05rem;
+  margin: 1.4rem 0;
+  font-size: .93rem;
+}
+.note :first-child { margin-top: 0; }
+.note :last-child { margin-bottom: 0; }
+
+.cards { display: grid; gap: .9rem; margin: 1.75rem 0 0; }
+@media (min-width: 42rem) { .cards { grid-template-columns: repeat(3, 1fr); } }
+.card {
+  border: 1px solid var(--line);
+  border-top: 2px solid var(--accent);
+  border-radius: 4px;
+  padding: 1.05rem 1.15rem;
+  text-decoration: none;
+  color: inherit;
+  display: block;
+  background: var(--panel);
+}
+.card:hover { border-color: var(--accent); }
+.card h3 {
+  margin: 0 0 .3rem;
+  font-size: 1rem;
+}
+.card p { margin: 0; color: var(--muted); font-size: .89rem; line-height: 1.5; }
+
+/* numbered tutorial steps */
+.step { counter-increment: step; }
+.steps { counter-reset: step; }
+.step > h3::before {
+  content: counter(step);
+  display: inline-grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  margin-right: .55rem;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--paper);
+  font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+  font-size: .8rem;
+  font-weight: 600;
+  vertical-align: 2px;
+}
+
+footer {
+  max-width: 45rem;
+  margin: 4.5rem auto 0;
+  padding-top: 1.4rem;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: .86rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem .9rem;
+  align-items: center;
+}
+footer a { text-decoration-color: var(--rule); }

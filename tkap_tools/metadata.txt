@@ -1,0 +1,43 @@
+[general]
+name=TKAP Tools
+qgisMinimumVersion=3.34
+description=Field tools for the Türkmen-Karahöyük Archaeological Project: stratigraphic phasing, section drawing, and Emlid GNSS point conversion.
+about=The TKAP QGIS toolset, shipped as one plugin so the tools stay in step with
+    the project's Stratigraphic Unit schema. Three tools live under the TKAP Tools
+    menu:
+    .
+    Stratigraphic Phasing -- splits a layer of Stratigraphic Units into one layer
+    per phase for a chosen excavation field, parsing the delimited space_phase
+    attribute. An SU spanning several phases is written into every phase layer it
+    belongs to. Output goes to live filtered layers, scratch layers, or a
+    GeoPackage. A second action exports one phase plan per layer from a print
+    layout you designed.
+    .
+    Section Drawing -- draw a section trace in plan view, pick the SUs that cross
+    it, place a photo of the excavation wall using surveyed control points, and
+    digitise SU polygons against absolute elevation. Outputs a measured drawing
+    and a wireframe-over-photo version, both with an elevation axis. Newer than
+    the other two tools; treat as beta.
+    .
+    Emlid to SU -- reads Emlid GNSS point exports and connects each SU's points
+    in increment order into a closed polygon, either replacing geometry on an
+    existing SU layer or building onto a new temporary layer.
+    .
+    Licensed GPL-2.0-or-later. See LICENSE in the plugin folder.
+version=1.0.0
+author=Türkmen-Karahöyük Archaeological Project (TKAP)
+email=andymcgallian@gmail.com
+
+homepage=https://github.com/amcgallian/tkap-qgis
+repository=https://github.com/amcgallian/tkap-qgis
+tracker=https://github.com/amcgallian/tkap-qgis/issues
+
+tags=archaeology,stratigraphy,excavation,section,emlid,gnss,survey,geometry,polygon
+category=Vector
+icon=icon.svg
+experimental=False
+deprecated=False
+hasProcessingProvider=no
+
+changelog=1.0.0
+    - First release.

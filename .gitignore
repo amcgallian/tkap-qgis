@@ -1,0 +1,27 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# built plugin zips -- releases carry these, the repo does not
+dist/
+
+# Real TKAP excavation data used as test fixtures. This repository is public;
+# site data is not.
+tests/
+
+# Kept locally, deliberately not published. People install this from the
+# plugin repository or a release zip; nobody needs the working notes or the
+# long-form per-tool write-ups.
+NOTES.md
+docs/reference/
+
+# QGIS / GIS working files
+*.qgz~
+*.gpkg-shm
+*.gpkg-wal
+
+# editors, OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

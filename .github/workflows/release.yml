@@ -1,0 +1,65 @@
+name: Release
+
+# Cutting a release is: bump `version` in tkap_tools/metadata.txt, commit, then
+#   git tag v1.0.1 && git push --tags
+# The feed on Pages points at the "latest release" permalink, so it picks this
+# up without needing to be rebuilt.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build and validate the plugin zip
+        run: python build_zip.py
+
+      - name: Check the tag matches metadata.txt
+        # Catches the classic slip: tagging v1.0.1 without bumping the version
+        # in metadata.txt. QGIS keys updates off metadata, so the mismatch
+        # would mean the release is published but never offered to anyone.
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          META=$(python -c "import configparser;p=configparser.ConfigParser();p.read('tkap_tools/metadata.txt',encoding='utf-8');print(p['general']['version'])")
+          echo "tag=$TAG metadata=$META"
+          if [ "$TAG" != "$META" ]; then
+            echo "::error::tag v$TAG does not match metadata.txt version $META"
+            exit 1
+          fi
+
+      - name: Check the published feed matches this version
+        # Pages deploys from the branch, so docs/plugins.xml is served exactly as
+        # committed. If it was not regenerated after the version bump, QGIS keeps
+        # advertising the old version and nobody is ever offered this release.
+        # Fail here rather than ship a release no one is told about.
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          FEED=$(python -c "import xml.etree.ElementTree as ET;print(ET.parse('docs/plugins.xml').find('.//version').text)")
+          META=$(python -c "import configparser;p=configparser.ConfigParser();p.read('tkap_tools/metadata.txt',encoding='utf-8');print(p['general']['version'])")
+          echo "feed=$FEED metadata=$META"
+          if [ "$FEED" != "$META" ]; then
+            echo "::error::docs/plugins.xml says $FEED but metadata.txt says $META -- run 'python build_repo_xml.py' and commit"
+            exit 1
+          fi
+
+      - name: Publish the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/tkap_tools.zip
+          generate_release_notes: true

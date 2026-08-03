@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stratigraphic Phasing - TKAP Tools</title>
+<meta name="description" content="Split Stratigraphic Units into one layer per phase for an excavation field, and export a plan for each.">
+<link rel="icon" href="assets/tkap-mark.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <a class="brand" href="./">
+    <img src="assets/tkap-mark.png" alt="">
+    <span class="brand-text">
+      <span class="brand-name">TKAP Tools</span>
+      <span class="brand-sub">Türkmen-Karahöyük Archaeological Project</span>
+    </span>
+  </a>
+  <div class="strata"><i></i><i></i><i></i><i></i></div>
+  <nav class="tabs">
+    <a href="./">Overview</a>
+    <a href="emlid.html">Emlid to SU</a>
+    <a href="phasing.html" aria-current="page">Stratigraphic Phasing</a>
+    <a href="section.html">Section Drawing</a>
+  </nav>
+</header>
+
+<main>
+  <h1>Stratigraphic Phasing</h1>
+  <p class="lede">Splits Stratigraphic Units into one layer per phase.</p>
+
+  <h2>Overview</h2>
+  <div class="table-wrap">
+  <table>
+    <tr><th>Action</th><th>What it does</th></tr>
+    <tr><td>Split by Phase…</td><td>Builds the per-phase layers for one excavation field.</td></tr>
+    <tr><td>Export Phase Plans…</td><td>Exports one plan per phase using a print layout you designed.</td></tr>
+  </table>
+  </div>
+
+  <p>The <code>space_phase</code> field holds a comma-separated list, one entry per space the SU belongs to:</p>
+  <pre><code>Sp.85.3 (Abandonment), Sp.85.1 (Construction), Sp.85.2 (Occupation)</code></pre>
+  <p>Each entry becomes a <code>(space, phase)</code> bucket, and each bucket becomes one output layer, e.g. <code>Field6_Sp34_Phase1_Construction</code>.</p>
+
+  <div class="note">
+    <p><strong>Grouping is per space, not per phase number.</strong> Phase numbers run independently within each space, so <code>Sp.33.1</code> and <code>Sp.34.1</code> are unrelated moments and stay in separate layers.</p>
+  </div>
+
+  <p>An SU can appear in several layers. One in several spaces lands in each space's layer, and one listed for several phases within a space (a wall built in one phase and still standing later) lands in every phase it lists. Geometry is duplicated across those layers, so the output feature count is higher than the input SU count.</p>
+
+  <h2>Tutorial: Split by Phase</h2>
+
+  <div class="steps">
+    <section class="step">
+      <h3>Open it</h3>
+      <p><strong>Plugins → TKAP Tools → Split by Phase…</strong></p>
+    </section>
+
+    <section class="step">
+      <h3>Pick the SU layer</h3>
+      <p>Polygon layers only.</p>
+    </section>
+
+    <section class="step">
+      <h3>Confirm the space_phase field</h3>
+      <p>Auto-detected. Falls back to <code>space_phas</code> for shapefile exports, where names get truncated at 10 characters.</p>
+    </section>
+
+    <section class="step">
+      <h3>Confirm the field designator and value</h3>
+      <p><code>area</code> in TKAP data. The value list is read live from the layer, with numeric values sorted numerically.</p>
+    </section>
+
+    <section class="step">
+      <h3>Read the preview</h3>
+      <p>It reports how many layers you'll get, how many SUs are phased, and how many aren't.</p>
+    </section>
+
+    <section class="step">
+      <h3>Choose an output mode</h3>
+      <div class="table-wrap">
+      <table>
+        <tr><th></th><th>Filtered (default)</th><th>Scratch</th><th>GeoPackage</th></tr>
+        <tr><td>Copies data</td><td>no</td><td>yes, in RAM</td><td>yes, to disk</td></tr>
+        <tr><td>Filter editable after</td><td>yes</td><td>no</td><td>no</td></tr>
+        <tr><td>Tracks source changes</td><td>yes, live</td><td>no, frozen</td><td>no, frozen</td></tr>
+        <tr><td>Survives closing QGIS</td><td>yes, as project layers</td><td>no</td><td>yes</td></tr>
+      </table>
+      </div>
+
+      <p><strong>Live filtered layers</strong> point at the same source with an editable filter, so nothing is copied. So <code>Field6_Sp34_Phase1_Construction</code> is really:</p>
+      <pre><code>"area" = '6' AND "space_phase" LIKE '%Sp.34.1 (%'</code></pre>
+      <p>Open <strong>Layer Properties → Source → Query Builder</strong> on any phase layer to add your own clauses. Because these address the same table as the source, they're locked read-only. Toggle Editing is disabled so an edit session can't reach production data. The filter stays editable; only the features are protected.</p>
+
+      <p><strong>Temporary scratch layers</strong> are a frozen in-memory copy. Editable, because editing a copy can't reach the original. Gone when you close QGIS unless you save them.</p>
+
+      <p><strong>GeoPackage</strong> writes every phase as a separate table in one <code>.gpkg</code>. The tool refuses to write to the source layer's own file.</p>
+    </section>
+
+    <section class="step">
+      <h3>Run</h3>
+      <p>Output layers inherit the source layer's renderer, labelling, opacity and blend mode, so they look like what you started from. Turn that off with <em>Inherit symbology from the source layer</em>.</p>
+    </section>
+  </div>
+
+  <h2>Tutorial: Export Phase Plans</h2>
+
+  <p>The tool doesn't invent a layout. Design one print layout in QGIS the way you want the plans to look, with north arrow, scale bar, legend and title block, and this walks the phase layers, showing one at a time, exporting a file for each.</p>
+
+  <div class="steps">
+    <section class="step">
+      <h3>Pick the group and the phases</h3>
+      <p>Choose the group of phase layers and tick which ones to export.</p>
+    </section>
+
+    <section class="step">
+      <h3>Optionally pick a Features group</h3>
+      <p>Features have no <code>space_phase</code> attribute, so they can't be split the way SUs are. Build the per-phase feature layers yourself, put them in a group, and point <strong>Features (optional)</strong> at it. Name each one after the phase layer it belongs with. Matching runs in this order:</p>
+      <div class="table-wrap">
+      <table>
+        <tr><th>Order</th><th>For phase layer <code>Field6_Sp34_Phase1_Construction</code></th></tr>
+        <tr><td>1. Same name</td><td><code>Field6_Sp34_Phase1_Construction</code></td></tr>
+        <tr><td>2. Same name, any punctuation or case</td><td><code>field6 sp34 phase1 construction</code></td></tr>
+        <tr><td>3. Space and phase anywhere in the name</td><td><code>Features_Sp34_Phase1</code></td></tr>
+      </table>
+      </div>
+      <p>Both the Sp and Phase numbers have to match. A phase with no features layer still exports, SUs only.</p>
+    </section>
+
+    <section class="step">
+      <h3>Pick your print layout</h3>
+    </section>
+
+    <section class="step">
+      <h3>Set up the title, if you want one</h3>
+      <p>Add a text item to your layout and type <code>Title</code> in it. That's the setup. The tool finds any label whose text is exactly that, rewrites it per phase, and puts <code>Title</code> back at the end. A label with the item id <code>phase_title</code> is always matched too.</p>
+      <p><strong>Replace with:</strong> is a template. The default renders as <em>Field 6 - Space 34, Phase 1 (Construction)</em>:</p>
+      <pre><code>{field} - Space {space}, Phase {phase} ({phase_name})</code></pre>
+      <p>Placeholders: <code>{field}</code>, <code>{space}</code>, <code>{phase}</code>, <code>{phase_name}</code>, <code>{layer}</code>, and <code>\n</code> for a line break.</p>
+    </section>
+
+    <section class="step">
+      <h3>Choose folder, format and DPI</h3>
+      <p>JPEG by default. PNG, PDF and SVG also available.</p>
+    </section>
+
+    <section class="step">
+      <h3>Preview, then export</h3>
+      <p><strong>Preview…</strong> steps through the phases with Previous/Next, reporting the SU count and which features layer matched. It runs the same code path as the real export, so what you see is what gets written.</p>
+      <p>Output is one file per phase, named after the layer. Layer visibility, layer names, title text and legend state are all restored afterwards.</p>
+    </section>
+  </div>
+
+  <h2>Output columns</h2>
+  <p>Each output layer carries the source attributes plus three provenance columns, toggleable in the dialog. On live filtered layers these are virtual fields held in the QGIS project, so nothing is written to PostGIS.</p>
+  <div class="table-wrap">
+  <table>
+    <tr><th>Column</th><th>Meaning</th></tr>
+    <tr><td><code>ph_space</code></td><td>space number this layer represents</td></tr>
+    <tr><td><code>ph_num</code></td><td>phase number within that space</td></tr>
+    <tr><td><code>ph_name</code></td><td>phase name</td></tr>
+  </table>
+  </div>
+
+  <h2>Layer ordering</h2>
+  <p>Higher phase numbers are earlier in time, because contexts are numbered as they're excavated, so Construction sits at the highest number and Phase 1 is the latest. Layers are inserted in ascending <code>(space, phase)</code> order, which puts the latest phase at the top of the group and keeps <code>Phase10</code> after <code>Phase9</code>.</p>
+  <p>Enable <em>Zero-pad phase numbers</em> if you also want correct alphabetical sorting when browsing the GeoPackage elsewhere.</p>
+
+  <h2>Warnings</h2>
+  <p>Non-fatal data problems show in the dialog and in <strong>Log Messages</strong> under the <code>TKAP Phasing</code> tab:</p>
+  <ul>
+    <li>a <code>space_phase</code> with text the parser couldn't consume, usually a value truncated by a 254-character shapefile export. The parseable entries are still used;</li>
+    <li>a <code>(space, phase)</code> pair with conflicting phase names across SUs. The first-seen name is used;</li>
+    <li>an SU with no geometry.</li>
+  </ul>
+  <p>SUs with a blank <code>space_phase</code> are counted as unphased and skipped.</p>
+
+  <h2>From the Python console</h2>
+  <pre><code>from tkap_tools.phasing.phasing_runner import run_phasing, PhasingParams
+from qgis.utils import iface
+
+outcome = run_phasing(PhasingParams(layer=iface.activeLayer(), area_value="6"))
+print(outcome.layer_names)</code></pre>
+</main>
+
+<footer>
+  <span><a href="https://github.com/amcgallian/tkap-qgis">Source on GitHub</a></span>
+  <span>GPL-2.0-or-later</span>
+</footer>
+</body>
+</html>

@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TKAP Tools</title>
+<meta name="description" content="QGIS tools for Türkmen-Karahöyük field data: Emlid GNSS conversion, stratigraphic phasing, and section drawing.">
+<link rel="icon" href="assets/tkap-mark.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <a class="brand" href="./">
+    <img src="assets/tkap-mark.png" alt="">
+    <span class="brand-text">
+      <span class="brand-name">TKAP Tools</span>
+      <span class="brand-sub">Türkmen-Karahöyük Archaeological Project</span>
+    </span>
+  </a>
+  <div class="strata"><i></i><i></i><i></i><i></i></div>
+  <nav class="tabs">
+    <a href="./" aria-current="page">Overview</a>
+    <a href="emlid.html">Emlid to SU</a>
+    <a href="phasing.html">Stratigraphic Phasing</a>
+    <a href="section.html">Section Drawing</a>
+  </nav>
+</header>
+
+<main>
+  <h1>TKAP Tools</h1>
+  <p class="lede">QGIS tools for Türkmen-Karahöyük excavation data.</p>
+
+  <div class="cards">
+    <a class="card" href="emlid.html">
+      <h3>Emlid to SU</h3>
+      <p>Turn GNSS point exports into SU polygons.</p>
+    </a>
+    <a class="card" href="phasing.html">
+      <h3>Stratigraphic Phasing</h3>
+      <p>Split SUs into one layer per phase, and export phase plans.</p>
+    </a>
+    <a class="card" href="section.html">
+      <h3>Section Drawing</h3>
+      <p>Draw sections over a rectified photo of the wall.</p>
+    </a>
+  </div>
+
+  <h2>Install</h2>
+  <p>Add the repository once. Updates then come through the Plugin Manager.</p>
+
+  <span class="url">https://amcgallian.github.io/tkap-qgis/plugins.xml</span>
+
+  <ol>
+    <li><strong>Plugins → Manage and Install Plugins → Settings</strong></li>
+    <li>Under <em>Plugin Repositories</em>, click <strong>Add…</strong></li>
+    <li>Name it <code>TKAP</code>, paste the URL above, click OK</li>
+    <li>Go to the <strong>All</strong> tab, search <code>TKAP Tools</code>, install</li>
+  </ol>
+
+  <div class="note">
+    <p>For update notifications, check <strong>Check for updates on startup</strong> on that same Settings tab and set how often you want it to look.</p>
+  </div>
+
+  <p>Or take the zip from the <a href="https://github.com/amcgallian/tkap-qgis/releases/latest">latest release</a> and use <strong>Install from ZIP</strong>. You'll have to repeat that by hand for each update.</p>
+
+  <p>Needs QGIS 3.34 or newer.</p>
+
+  <h2>Where the tools live</h2>
+  <p>One entry in the Plugins menu, <strong>TKAP Tools</strong>, with every action under it. The toolbar button opens the same menu.</p>
+
+  <div class="table-wrap">
+  <table>
+    <tr><th>Tool</th><th>Actions</th></tr>
+    <tr><td><a href="emlid.html">Emlid to SU</a></td><td>Emlid to SU…</td></tr>
+    <tr><td><a href="phasing.html">Stratigraphic Phasing</a></td><td>Split by Phase… · Export Phase Plans…</td></tr>
+    <tr><td><a href="section.html">Section Drawing</a></td><td>Draw a section… · Open a saved section…</td></tr>
+  </table>
+  </div>
+
+  <h2>If a tool is missing</h2>
+  <p>The tools load separately, so one failing doesn't stop the others. If an action isn't in the menu, open <strong>View → Panels → Log Messages</strong> and read the <code>TKAP Tools</code> tab. The reason is there. <a href="https://github.com/amcgallian/tkap-qgis/issues">Open an issue</a> with what it says.</p>
+</main>
+
+<footer>
+  <span><a href="https://github.com/amcgallian/tkap-qgis">Source on GitHub</a></span>
+  <span>GPL-2.0-or-later</span>
+</footer>
+</body>
+</html>

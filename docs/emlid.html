@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Emlid to SU - TKAP Tools</title>
+<meta name="description" content="Turn an Emlid GNSS point export into SU polygons, replacing geometry on an existing layer or building onto a temporary one.">
+<link rel="icon" href="assets/tkap-mark.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <a class="brand" href="./">
+    <img src="assets/tkap-mark.png" alt="">
+    <span class="brand-text">
+      <span class="brand-name">TKAP Tools</span>
+      <span class="brand-sub">Türkmen-Karahöyük Archaeological Project</span>
+    </span>
+  </a>
+  <div class="strata"><i></i><i></i><i></i><i></i></div>
+  <nav class="tabs">
+    <a href="./">Overview</a>
+    <a href="emlid.html" aria-current="page">Emlid to SU</a>
+    <a href="phasing.html">Stratigraphic Phasing</a>
+    <a href="section.html">Section Drawing</a>
+  </nav>
+</header>
+
+<main>
+  <h1>Emlid to SU</h1>
+  <p class="lede">Turns an Emlid GNSS point export into SU polygons.</p>
+
+  <h2>Overview</h2>
+  <p>Two modes:</p>
+
+  <div class="table-wrap">
+  <table>
+    <tr><th>Mode</th><th>What happens</th></tr>
+    <tr>
+      <td>Replace geometry on an existing SU layer</td>
+      <td>Matches records by SU number and swaps in the new outline. Never adds rows, never edits attributes. By default the changes sit in the layer's edit buffer so you can look at them before keeping them.</td>
+    </tr>
+    <tr>
+      <td>Build polygons on a new temporary layer</td>
+      <td>Connect-the-dots with no target and no matching. Writes to a fresh in-memory layer (EPSG:32636) carrying the SU number and vertex count. Nothing on disk is touched.</td>
+    </tr>
+  </table>
+  </div>
+
+  <p>Input can be one file, several files at once, or a point layer already loaded in the project. With several files the points are combined and grouped by SU across all of them.</p>
+
+  <p>CSV and Excel are read through GDAL/OGR, which QGIS already ships. No pandas or openpyxl needed.</p>
+
+  <h2>Tutorial</h2>
+
+  <div class="steps">
+    <section class="step">
+      <h3>Open it</h3>
+      <p><strong>Plugins → TKAP Tools → Emlid to SU…</strong></p>
+    </section>
+
+    <section class="step">
+      <h3>Pick what to do</h3>
+      <p>Choose <em>Replace geometry on an existing SU layer</em> or <em>Build polygons on a new temporary layer</em>. In temporary-layer mode the target and replacement-rule options switch off and you can name the new layer.</p>
+    </section>
+
+    <section class="step">
+      <h3>Point it at your Emlid data</h3>
+      <p>Browse to one or more CSV/Excel exports, or pick a point layer from the project. Each source needs a <code>Name</code> column and either <code>Longitude</code>/<code>Latitude</code> or <code>Easting</code>/<code>Northing</code>. Lon/Lat is preferred, and gets reprojected from WGS84 into EPSG:32636.</p>
+    </section>
+
+    <section class="step">
+      <h3>Set the target</h3>
+      <p>Replace mode only. Pick the polygon layer to write into and confirm which field holds the SU number; it defaults to <code>SU</code>. Matching is on the SU number alone, with no field or trench designator.</p>
+    </section>
+
+    <section class="step">
+      <h3>Choose the replacement rule</h3>
+      <ul>
+        <li><strong>Replace geometry regardless</strong>: overwrite the shape of any matching SU, whether or not it had one.</li>
+        <li><strong>Only fill empty / missing geometry</strong>: fill records whose geometry is empty or NULL, leave the rest alone.</li>
+      </ul>
+    </section>
+
+    <section class="step">
+      <h3>Optionally add QC points</h3>
+      <p>Drops a point layer per SU with the raw vertices, so you can check the outline against the original shots. Leave the folder blank for in-memory layers, or point it at a folder to write shapefiles.</p>
+    </section>
+
+    <section class="step">
+      <h3>Run, then review</h3>
+      <p>In replace mode the new outlines are staged in the edit buffer. Keep them with <strong>Save Layer Edits</strong> (the disk icon on the Digitizing toolbar), or discard by toggling editing off without saving. There's a checkbox to commit straight to disk if you'd rather skip the review.</p>
+    </section>
+  </div>
+
+  <div class="note">
+    <p>If the target layer is already in an edit session, the changes join that buffer. The tool never force-saves.</p>
+  </div>
+
+  <h2>Point naming</h2>
+  <p>Both of these read as the same SU:</p>
+  <pre><code>SU_6.1355-1     the full form
+SU_1355-1       the shorthand</code></pre>
+  <p>The increment is the last number, the SU is the number before it, and any leading field number is ignored. Separators and zero-padding are lenient, so <code>SU_1355 1</code>, <code>SU-1355-1</code>, <code>SU_01355-1</code> and <code>SU#6/1355:1</code> all parse. Anything not starting with <code>SU</code> is ignored.</p>
+
+  <p>Points need to be recorded walking the perimeter in increment order, since the tool connects them in that order. Each SU needs at least three points.</p>
+
+  <h2>What it skips</h2>
+  <ul>
+    <li>An SU with no matching record, or matching more than one.</li>
+    <li>A <code>SU</code>-prefixed point that isn't an outline vertex, like a single labelled shot with no increment. Skipped with a warning; the rest of the file still runs.</li>
+    <li>An SU whose points repeat an increment number, since the outline order is ambiguous. That SU alone is skipped.</li>
+  </ul>
+  <p>Only a genuinely unusable table stops the run: one missing <code>Name</code>, or missing both coordinate pairs.</p>
+
+  <h2>Known limits</h2>
+  <ul>
+    <li>No self-intersection check. A bowtie depends on the order the shots were walked.</li>
+    <li>If the target layer's CRS can't be resolved, the tool assumes it already matches EPSG:32636 rather than reprojecting.</li>
+  </ul>
+</main>
+
+<footer>
+  <span><a href="https://github.com/amcgallian/tkap-qgis">Source on GitHub</a></span>
+  <span>GPL-2.0-or-later</span>
+</footer>
+</body>
+</html>

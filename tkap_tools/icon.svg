@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <title>TKAP Tools</title>
+  <!-- A hoyuk: the settlement mound read as the strata that raised it, broad
+       base to rounded crown, in the same ochre to umber ramp as the phasing
+       icon so the marks read as one family.
+
+       Every band is its own closed path rather than a rect clipped to a mound
+       outline. QGIS renders toolbar icons through Qt, which implements only SVG
+       Tiny and silently ignores clipPath, so the clipped version came out as a
+       filled square. -->
+
+  <!-- crown -->
+  <path d="M5.2 12.8 C5.9 9.4 8.5 7.6 12 7.6 C15.5 7.6 18.1 9.4 18.8 12.8 Z"
+        fill="#c8a165" stroke="#5a3a22" stroke-width="1" stroke-linejoin="round"/>
+  <!-- middle -->
+  <path d="M3.3 16.6 L5.2 12.8 L18.8 12.8 L20.7 16.6 Z"
+        fill="#a87c4a" stroke="#5a3a22" stroke-width="1" stroke-linejoin="round"/>
+  <!-- base -->
+  <path d="M1.5 20.4 L3.3 16.6 L20.7 16.6 L22.5 20.4 Z"
+        fill="#8a5f34" stroke="#5a3a22" stroke-width="1" stroke-linejoin="round"/>
+  <!-- ground -->
+  <path d="M1 20.4 H23" fill="none" stroke="#5a3a22" stroke-width="1"
+        stroke-linecap="round"/>
+</svg>

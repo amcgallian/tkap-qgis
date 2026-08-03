@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Section Drawing - TKAP Tools</title>
+<meta name="description" content="Draw archaeological sections by rectifying a photo of an excavation wall and digitising SU polygons against absolute elevation.">
+<link rel="icon" href="assets/tkap-mark.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <a class="brand" href="./">
+    <img src="assets/tkap-mark.png" alt="">
+    <span class="brand-text">
+      <span class="brand-name">TKAP Tools</span>
+      <span class="brand-sub">Türkmen-Karahöyük Archaeological Project</span>
+    </span>
+  </a>
+  <div class="strata"><i></i><i></i><i></i><i></i></div>
+  <nav class="tabs">
+    <a href="./">Overview</a>
+    <a href="emlid.html">Emlid to SU</a>
+    <a href="phasing.html">Stratigraphic Phasing</a>
+    <a href="section.html" aria-current="page">Section Drawing</a>
+  </nav>
+</header>
+
+<main>
+  <h1>Section Drawing</h1>
+  <p class="lede">Draws sections over a rectified photo of the wall.</p>
+
+  <h2>Overview</h2>
+  <p>A photo of an excavation wall is rectified into a section-local coordinate space where <code>x</code> is chainage along the section trace and <code>y</code> is absolute elevation. Because <code>y</code> is elevation, the elevation axis on the finished figure is just a map grid, and every polygon you draw is directly comparable to the RTK elevations in the database.</p>
+
+  <p>Drawing happens on the main QGIS canvas, not in a dialog, so you get the real vertex tool, snapping, undo and layouts. Everything the tool changes (project CRS, layer visibility, snapping) is recorded and restored when you finish.</p>
+
+  <p>Output is two figures: a clean measured drawing, and a wireframe over the photo. Both carry an elevation axis.</p>
+
+  <div class="note">
+    <p>Newer than the other two tools. Treat it as beta.</p>
+  </div>
+
+  <h2>Tutorial</h2>
+
+  <div class="steps">
+    <section class="step">
+      <h3>Load and filter your SU layer</h3>
+      <p>Set the project up as you normally would. The tool reads whatever layer you point it at, honouring its filter and its symbology. PostGIS, file GDB and shapefile all work.</p>
+    </section>
+
+    <section class="step">
+      <h3>Draw the trace</h3>
+      <p><strong>Plugins → TKAP Tools → Draw a section…</strong>, then click one end of the wall and the other in plan view.</p>
+      <p>While you drag, the preview shows three things: the shaded band is the face being drawn, the circle marks chainage 0, and the arrow shows which way chainage grows, which is also the direction the finished drawing reads left to right.</p>
+      <p>Press <strong>SPACE</strong> or <strong>F</strong> to put the face on the other side. Right-click cancels.</p>
+      <div class="note">
+        <p>Which side you're looking at decides both which SUs get collected and whether the photo comes out mirrored. Pick it here, where the shaded band and arrow make it obvious, rather than finding out from a reversed drawing later.</p>
+      </div>
+    </section>
+
+    <section class="step">
+      <h3>Set up the section</h3>
+      <ul>
+        <li><strong>Stratigraphic units</strong> tab: choose the SU layer, pick SUs either by crossing the trace or by their space (PostGIS only), and review the seed each one will get.</li>
+        <li><strong>Photo &amp; control points</strong> tab: load the wall photo, load the Emlid CSV, click each control point on the image, and check the fit.</li>
+      </ul>
+    </section>
+
+    <section class="step">
+      <h3>Check the datum before you trust an elevation</h3>
+      <p>The control points and the database aren't necessarily on the same vertical datum. A file recorded on the receiver's "Global CS" has an empty <code>Elevation</code> column and only ellipsoidal height filled, at values around 1066 m, while <code>altitude_min</code>/<code>altitude_max</code> for the same wall read about 1030 m. The difference is the geoid separation, roughly 35.9 m at this site.</p>
+      <p>Get it wrong and the photo sits 36 m above the SUs. So the tool states which datum it found, exposes the separation as an explicit number, and offers <strong>Calibrate from a known elevation</strong>, where you enter the orthometric elevation of the top of the wall and it solves for the separation.</p>
+      <div class="note">
+        <p>PROJ won't do this for you here: no geoid grid is installed, and a vertical transform to EGM2008 returns the height unchanged rather than failing.</p>
+      </div>
+    </section>
+
+    <section class="step">
+      <h3>Start drawing</h3>
+      <p>The project switches into section-local coordinates, plan layers hide, the photo appears with seeded SU boxes over it, and the layer goes into edit mode. Vertex tool, reshape, split and snapping all behave as usual.</p>
+      <p>Seeds are full-height columns by default: each SU is placed by its chainage extent along the wall and stretched over the height of the section, stopping short of each edge so the edges are grabbable and read as provisional. You drag the top and bottom to where the photo says they belong.</p>
+      <p>Recorded elevations still show in the SU table, and <em>Seed from recorded SU elevations where available</em> opts into using them for a section where the data is known good.</p>
+    </section>
+
+    <section class="step">
+      <h3>Manage the roster as you go</h3>
+      <div class="table-wrap">
+      <table>
+        <tr><th>Control</th><th>What it does</th></tr>
+        <tr><td>Show</td><td>Hides a unit without removing it.</td></tr>
+        <tr><td>Isolate</td><td>Shows only the selected unit.</td></tr>
+        <tr><td>Add SU…</td><td>Brings in units that were missed, either by widening the search buffer or by picking a number from anywhere in the layer.</td></tr>
+        <tr><td>Remove</td><td>Takes a unit out.</td></tr>
+        <tr><td>Re-seed</td><td>Puts a fresh box back.</td></tr>
+      </table>
+      </div>
+      <p>Unticking <strong>Show</strong> renders a unit with a transparent symbol rather than filtering it out, so it keeps snapping. You can hide a crowded neighbour and still snap a new boundary onto its edge. Hidden units still appear in the exported figures; use <strong>Remove</strong> to exclude something.</p>
+    </section>
+
+    <section class="step">
+      <h3>Export</h3>
+      <p>From the panel, export the clean drawing, the wireframe over the photo, or both. PNG, PDF and SVG.</p>
+    </section>
+
+    <section class="step">
+      <h3>Finish</h3>
+      <p>Restores your project CRS, layer visibility and snapping.</p>
+    </section>
+  </div>
+
+  <h2>Saving and reopening</h2>
+  <p><strong>Save</strong> in the panel writes the section to a GeoPackage. <strong>Plugins → TKAP Tools → Open a saved section…</strong> reads one back and carries on editing.</p>
+  <p>The rectified photo is referenced, not stored, so a moved or offline share costs you the backdrop but not the drawing. If the photo isn't where it was, the section opens without it and says so.</p>
+
+  <h2>Notes</h2>
+  <ul>
+    <li>The section CRS is a transverse mercator with <code>lat_0 = lon_0 = 0</code> and unit scale. The trace parameters are written into the CRS <code>REMARK</code>, so any layer or raster carrying it can be tied back to EPSG:32636.</li>
+    <li>The fit reports when a placement comes out mirrored, with the right of the photo landing on the left of the drawing, and offers a one-click flip.</li>
+    <li>One survey file can cover several walls. Points are selected by perpendicular distance to the trace, and the dialog says how many were left out.</li>
+  </ul>
+</main>
+
+<footer>
+  <span><a href="https://github.com/amcgallian/tkap-qgis">Source on GitHub</a></span>
+  <span>GPL-2.0-or-later</span>
+</footer>
+</body>
+</html>

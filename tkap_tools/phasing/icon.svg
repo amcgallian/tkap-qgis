@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <title>TKAP Stratigraphic Phasing</title>
+  <!-- Stacked stratigraphic phases, separated -->
+  <g stroke="#5a3a22" stroke-width="1" stroke-linejoin="round">
+    <polygon points="2,6 12,2 22,6 12,10" fill="#c8a165"/>
+    <polygon points="2,12.5 12,8.5 22,12.5 12,16.5" fill="#a87c4a"/>
+    <polygon points="2,19 12,15 22,19 12,23" fill="#8a5f34"/>
+  </g>
+</svg>
