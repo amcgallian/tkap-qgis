@@ -26,7 +26,7 @@ about=The TKAP QGIS tools. Three tools live under the TKAP Tools
     uncross itself before the polygon is built.
     .
     Licensed GPL-2.0-or-later. See LICENSE in the plugin folder.
-version=1.1.0
+version=1.1.1
 author=Türkmen-Karahöyük Archaeological Project (TKAP)
 email=andymcgallian@gmail.com
 
@@ -41,7 +41,13 @@ experimental=False
 deprecated=False
 hasProcessingProvider=no
 
-changelog=1.1.0
+changelog=1.1.1
+    - Fix: the Survey Points to Polygons window opened taller than the screen
+      once both point types had a target row, putting Run and Close off the
+      bottom with no way to reach them. The settings now sit in a scrolling
+      panel, the log and both buttons stay outside it and are always visible,
+      and the window opens no larger than the display it lands on.
+    1.1.0
     - Emlid to SU is now Survey Points to Polygons, and builds feature outlines
       as well as SU outlines. F_ points (F_[Field].[Feature]-[n]) are read
       alongside SU_ points and written to the Features layer, matched on the

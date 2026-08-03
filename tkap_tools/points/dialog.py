@@ -21,7 +21,7 @@ Edits to keep them or discards them.
 
 import traceback
 
-from qgis.PyQt import QtWidgets
+from qgis.PyQt import QtCore, QtWidgets
 from qgis.gui import QgsMapLayerComboBox, QgsFieldComboBox, QgsFileWidget
 from qgis.core import (
     QgsProject,
@@ -95,15 +95,65 @@ class SurveyPointsDialog(QtWidgets.QDialog):
         self.iface = iface
         self.setWindowTitle(TITLE)
         self.setMinimumWidth(620)
+        self.setSizeGripEnabled(True)
         self._build_ui()
         self._wire_events()
         self._sync_enabled_states()
         for row in self.target_rows:
             self._preselect_layer(row)
+        self._fit_to_screen()
+
+    def _fit_to_screen(self):
+        """
+        Open at the size the layout wants, but never taller or wider than the
+        screen it lands on. The scroll area makes an over-tall dialog usable;
+        this stops it happening in the first place, including on the small
+        laptop screens these run on in the field.
+        """
+        screen = None
+        # QWidget.screen() is Qt >= 5.14; older builds fall back to the primary.
+        current = getattr(self, "screen", None)
+        if callable(current):
+            screen = current()
+        if screen is None:
+            screen = QtWidgets.QApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        hint = self.sizeHint()
+
+        # QScrollArea caps its own sizeHint at a couple of hundred pixels, so
+        # asking the dialog for its hint would open the settings panel scrolled
+        # even on a screen with room to spare. Measure the panel itself and add
+        # back everything outside the scroll area (log, buttons, margins).
+        chrome = hint.height() - self._scroll.sizeHint().height()
+        wanted = self._panel.sizeHint()
+
+        self.resize(
+            min(max(hint.width(), wanted.width()), int(available.width() * 0.9)),
+            min(chrome + wanted.height(), int(available.height() * 0.9)),
+        )
 
     # ------------------------------------------------------------------ UI ---
     def _build_ui(self):
-        layout = QtWidgets.QVBoxLayout(self)
+        outer = QtWidgets.QVBoxLayout(self)
+
+        # The settings go inside a scroll area and the log and buttons stay
+        # outside it. Two target rows made this dialog taller than a laptop
+        # screen, which pushed Run and Close off the bottom with no way to reach
+        # them; now the panel scrolls and those two are always on screen, as is
+        # the log the run is writing to.
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        # A horizontal bar here would mean the dialog is too narrow rather than
+        # too tall; let the widgets compress instead of scrolling sideways.
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        scroll.setMinimumHeight(180)
+
+        panel = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         # --- What to do: replace geometry on existing layers, or just build
         # the polygons onto new temporary layers ---
@@ -252,22 +302,32 @@ class SurveyPointsDialog(QtWidgets.QDialog):
         )
         qc_form.addWidget(self.qc_folder_widget, 3, 1)
         layout.addWidget(qc_box)
+        layout.addStretch(1)
 
-        # --- Log pane ---
+        scroll.setWidget(panel)
+        # Kept for _fit_to_screen, which sizes the dialog from the panel's real
+        # height rather than the scroll area's capped one.
+        self._scroll = scroll
+        self._panel = panel
+        # Extra height goes mostly to the settings, so a big screen shows them
+        # without scrolling at all, but the log still grows with the window.
+        outer.addWidget(scroll, 3)
+
+        # --- Log pane (outside the scroll area: always visible) ---
         self.log = QtWidgets.QPlainTextEdit()
         self.log.setReadOnly(True)
-        self.log.setMinimumHeight(160)
+        self.log.setMinimumHeight(120)
         self.log.setPlaceholderText("Run output will appear here…")
-        layout.addWidget(self.log, 1)
+        outer.addWidget(self.log, 1)
 
-        # --- Buttons ---
+        # --- Buttons (outside the scroll area: always reachable) ---
         btn_row = QtWidgets.QHBoxLayout()
         btn_row.addStretch(1)
         self.run_btn = QtWidgets.QPushButton("Replace geometry")
         self.close_btn = QtWidgets.QPushButton("Close")
         btn_row.addWidget(self.run_btn)
         btn_row.addWidget(self.close_btn)
-        layout.addLayout(btn_row)
+        outer.addLayout(btn_row)
 
     def _wire_events(self):
         self.rb_replace.toggled.connect(self._sync_enabled_states)
