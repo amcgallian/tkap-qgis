@@ -1,30 +1,32 @@
 [general]
 name=TKAP Tools
 qgisMinimumVersion=3.34
-description=Field tools for the Türkmen-Karahöyük Archaeological Project: stratigraphic phasing, section drawing, and Emlid GNSS point conversion.
-about=The TKAP QGIS toolset, shipped as one plugin so the tools stay in step with
-    the project's Stratigraphic Unit schema. Three tools live under the TKAP Tools
+description=Field tools for the Türkmen-Karahöyük Archaeological Project: stratigraphic phasing, section drawing, and GNSS survey point conversion.
+about=The TKAP QGIS tools. Three tools live under the TKAP Tools
     menu:
     .
-    Stratigraphic Phasing -- splits a layer of Stratigraphic Units into one layer
+    Stratigraphic Phasing: splits a layer of Stratigraphic Units into one layer
     per phase for a chosen excavation field, parsing the delimited space_phase
     attribute. An SU spanning several phases is written into every phase layer it
     belongs to. Output goes to live filtered layers, scratch layers, or a
     GeoPackage. A second action exports one phase plan per layer from a print
     layout you designed.
     .
-    Section Drawing -- draw a section trace in plan view, pick the SUs that cross
+    Section Drawing: draw a section trace in plan view, pick the SUs that cross
     it, place a photo of the excavation wall using surveyed control points, and
     digitise SU polygons against absolute elevation. Outputs a measured drawing
     and a wireframe-over-photo version, both with an elevation axis. Newer than
     the other two tools; treat as beta.
     .
-    Emlid to SU -- reads Emlid GNSS point exports and connects each SU's points
-    in increment order into a closed polygon, either replacing geometry on an
-    existing SU layer or building onto a new temporary layer.
+    Survey Points to Polygons: reads Emlid GNSS point exports and connects each
+    outline's points in increment order into a closed polygon. Handles both SU_
+    points and F_ feature points in one pass, each against its own target layer,
+    either replacing geometry on the existing layers or building onto new
+    temporary ones. An outline shot out of perimeter order is reordered to
+    uncross itself before the polygon is built.
     .
     Licensed GPL-2.0-or-later. See LICENSE in the plugin folder.
-version=1.0.0
+version=1.1.0
 author=Türkmen-Karahöyük Archaeological Project (TKAP)
 email=andymcgallian@gmail.com
 
@@ -32,12 +34,33 @@ homepage=https://github.com/amcgallian/tkap-qgis
 repository=https://github.com/amcgallian/tkap-qgis
 tracker=https://github.com/amcgallian/tkap-qgis/issues
 
-tags=archaeology,stratigraphy,excavation,section,emlid,gnss,survey,geometry,polygon
+tags=archaeology,stratigraphy,excavation,section,emlid,gnss,survey,geometry,polygon,feature
 category=Vector
 icon=icon.svg
 experimental=False
 deprecated=False
 hasProcessingProvider=no
 
-changelog=1.0.0
+changelog=1.1.0
+    - Emlid to SU is now Survey Points to Polygons, and builds feature outlines
+      as well as SU outlines. F_ points (F_[Field].[Feature]-[n]) are read
+      alongside SU_ points and written to the Features layer, matched on the
+      feature number against its Feature field.
+    - One run does both: each point type has its own target layer and number
+      field, and either can be switched off. Pointing both at the same layer is
+      refused rather than filing feature numbers as SU numbers.
+    - Crossover check. An outline whose points were shot out of perimeter order
+      makes a self-crossing "bowtie" polygon; it is now reordered to uncross
+      itself before the polygon is built, changing the recorded order as little
+      as possible so concave outlines stay concave. Each fix is logged with the
+      increments involved, and QC layers still show the shots as recorded so the
+      result can be checked against them. 74 of the 486 outlines in the seasons
+      archive self-cross.
+    - Feature-number field on the target layer defaults to Feature, SU to SU,
+      and each target layer is preselected by which of those fields it carries.
+    - Temporary-layer mode builds one layer per point type, each carrying the
+      number, the vertex count, and how many crossings were undone.
+    - QC layers are named QC_SU_<n> / QC_F_<n> and carry TYPE and NUMBER, so SU
+      55 and Feature 55 no longer collide.
+    1.0.0
     - First release.

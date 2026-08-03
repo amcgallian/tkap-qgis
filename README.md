@@ -4,7 +4,7 @@ QGIS plugin for the Türkmen-Karahöyük Archaeological Project.
 
 | Tool | What it does |
 |---|---|
-| **Emlid to SU** | Builds SU polygons from Emlid GNSS point exports. |
+| **Survey Points to Polygons** | Builds SU and Feature polygons from Emlid GNSS point exports. |
 | **Stratigraphic Phasing** | Splits SUs into one layer per phase, and exports phase plans. |
 | **Section Drawing** | Draws sections over a rectified photo of the wall. |
 

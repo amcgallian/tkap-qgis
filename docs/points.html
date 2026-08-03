@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Survey Points to Polygons - TKAP Tools</title>
+<meta name="description" content="Turn an Emlid GNSS point export into SU and Feature polygons, replacing geometry on the existing layers or building onto temporary ones.">
+<link rel="icon" href="assets/tkap-mark.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <a class="brand" href="./">
+    <img src="assets/tkap-mark.png" alt="">
+    <span class="brand-text">
+      <span class="brand-name">TKAP Tools</span>
+      <span class="brand-sub">Türkmen-Karahöyük Archaeological Project</span>
+    </span>
+  </a>
+  <div class="strata"><i></i><i></i><i></i><i></i></div>
+  <nav class="tabs">
+    <a href="./">Overview</a>
+    <a href="points.html" aria-current="page">Survey Points to Polygons</a>
+    <a href="phasing.html">Stratigraphic Phasing</a>
+    <a href="section.html">Section Drawing</a>
+  </nav>
+</header>
+
+<main>
+  <h1>Survey Points to Polygons</h1>
+  <p class="lede">Turns an Emlid GNSS point export into SU and Feature polygons.</p>
+
+  <div class="note">
+    <p>This was <strong>Emlid to SU</strong> before 1.1.0. It now reads feature outlines as well as SU outlines, and uncrosses an outline that was shot out of order.</p>
+  </div>
+
+  <h2>Overview</h2>
+  <p>Two modes:</p>
+
+  <div class="table-wrap">
+  <table>
+    <tr><th>Mode</th><th>What happens</th></tr>
+    <tr>
+      <td>Replace geometry on existing layer(s)</td>
+      <td>Matches records by number and swaps in the new outline. Never adds rows, never edits attributes. By default the changes sit in the layer's edit buffer so you can look at them before keeping them.</td>
+    </tr>
+    <tr>
+      <td>Build polygons on new temporary layers</td>
+      <td>Connect-the-dots with no target and no matching. Writes one fresh in-memory layer per point type (EPSG:32636) carrying the number, the vertex count, and how many crossings were undone. Nothing on disk is touched.</td>
+    </tr>
+  </table>
+  </div>
+
+  <p>Input can be one file, several files at once, or a point layer already loaded in the project. With several files the points are combined and grouped across all of them.</p>
+
+  <p>CSV and Excel are read through GDAL/OGR, which QGIS already ships. No pandas or openpyxl needed.</p>
+
+  <h2>Two kinds of outline, one run</h2>
+  <p>A day's export mixes both kinds of outline point, so one run reads both and writes each to its own layer:</p>
+
+  <div class="table-wrap">
+  <table>
+    <tr><th>Points</th><th>Name form</th><th>Goes to</th><th>Matched on</th></tr>
+    <tr>
+      <td>SU outlines</td>
+      <td><code>SU_[Field].[SU]-[n]</code></td>
+      <td>the SU layer</td>
+      <td>its <code>SU</code> field</td>
+    </tr>
+    <tr>
+      <td>Feature outlines</td>
+      <td><code>F_[Field].[Feature]-[n]</code></td>
+      <td>the Features layer</td>
+      <td>its <code>Feature</code> field</td>
+    </tr>
+  </table>
+  </div>
+
+  <p>SUs and features are numbered independently — SU 55 and Feature 55 are unrelated — so they always go to separate layers. Untick either type to skip it. Pointing both at the same layer is refused rather than filing feature numbers as SU numbers.</p>
+
+  <p>Every other coded point in the export is ignored: <code>E_</code> elevations, <code>O_</code> finds, <code>P_</code> pails, <code>GCP_</code> control, <code>S_</code> samples, <code>SEC_</code> section references.</p>
+
+  <h2>The crossover check</h2>
+  <p>If the points weren't shot walking cleanly round the perimeter, connecting them in increment order makes the outline cross itself — a bowtie. The tool finds those crossings and reorders the points to undo them before building the polygon.</p>
+
+  <p>It reorders as little as it can: it reverses the run of points between two crossing edges and nothing else, so an outline that was shot correctly comes out untouched, and a concave one stays concave instead of being rounded out. Every fix goes in the log with the increments involved:</p>
+
+  <pre><code>[WARNING] SU 1355: the outline crossed itself; reordered the
+points to uncross it (1 fix(es)). Increments are now connected
+1, 2, 5, 4, 3, 6 instead of 1, 2, 3, 4, 5, 6 — check the result
+against the shots before saving.</code></pre>
+
+  <p>It is worth checking those. The reordering removes the crossing, but only you know which shape you actually dug — turn on QC points and compare. QC layers always show the shots as recorded, so they are the reference to check a reordered outline against.</p>
+
+  <div class="note">
+    <p>For scale: 74 of the 486 outlines in the seasons archive cross themselves.</p>
+  </div>
+
+  <h2>Tutorial</h2>
+
+  <div class="steps">
+    <section class="step">
+      <h3>Open it</h3>
+      <p><strong>Plugins → TKAP Tools → Survey Points to Polygons…</strong></p>
+    </section>
+
+    <section class="step">
+      <h3>Pick what to do</h3>
+      <p>Choose <em>Replace geometry on existing layer(s)</em> or <em>Build polygons on new temporary layers</em>. In temporary-layer mode the target and replacement-rule options switch off and you can name the new layers.</p>
+    </section>
+
+    <section class="step">
+      <h3>Point it at your survey data</h3>
+      <p>Browse to one or more CSV/Excel exports, or pick a point layer from the project. Each source needs a <code>Name</code> column and either <code>Longitude</code>/<code>Latitude</code> or <code>Easting</code>/<code>Northing</code>. Lon/Lat is preferred, and gets reprojected from WGS84 into EPSG:32636.</p>
+    </section>
+
+    <section class="step">
+      <h3>Set the targets</h3>
+      <p>Replace mode only. Each ticked point type gets a target polygon layer and the field on it holding the number. Both are preselected for you: whichever polygon layer carries an <code>SU</code> field is offered for SU points, and whichever carries a <code>Feature</code> field for feature points. If nothing matches, the box is left empty rather than guessing.</p>
+    </section>
+
+    <section class="step">
+      <h3>Choose the replacement rule</h3>
+      <ul>
+        <li><strong>Replace geometry regardless</strong>: overwrite the shape of any match, whether or not it had one.</li>
+        <li><strong>Only fill empty / missing geometry</strong>: fill records whose geometry is empty or NULL, leave the rest alone.</li>
+      </ul>
+      <p>The rule applies to both targets.</p>
+    </section>
+
+    <section class="step">
+      <h3>Optionally add QC points</h3>
+      <p>Drops a point layer per outline with the raw vertices, so you can check the shape against the original shots — <code>QC_SU_1355</code>, <code>QC_F_55</code>. Leave the folder blank for in-memory layers, or point it at a folder to write shapefiles.</p>
+    </section>
+
+    <section class="step">
+      <h3>Run, then review</h3>
+      <p>Read the log: it names every outline it uncrossed, skipped, or couldn't match. In replace mode the new outlines are staged in each layer's edit buffer. Keep them with <strong>Save Layer Edits</strong> (the disk icon on the Digitizing toolbar), or discard by toggling editing off without saving. There's a checkbox to commit straight to disk if you'd rather skip the review.</p>
+    </section>
+  </div>
+
+  <div class="note">
+    <p>If a target layer is already in an edit session, the changes join that buffer. The tool never force-saves.</p>
+  </div>
+
+  <h2>Point naming</h2>
+  <p>All of these read as the same SU:</p>
+  <pre><code>SU_6.1355-1     the full form
+SU_1355-1       the shorthand</code></pre>
+  <p>And these as the same feature:</p>
+  <pre><code>F_2.55-1        the full form
+F_55-1          the shorthand</code></pre>
+  <p>The increment is the last number, the SU or feature number is the number before it, and any leading field number is ignored. Separators and zero-padding are lenient, so the variants that actually turn up in the exports all parse: <code>F-1.25-9</code>, <code>F_1.19.12</code>, <code>SU_1355 1</code>, <code>SU_01355-1</code>, <code>SU#6/1355:1</code>.</p>
+
+  <p>What it won't accept is a letter sitting where only numbers and separators belong, so <code>SU_2.115new-1</code> and <code>F_5.SU-719.xxx.1</code> are rejected with a warning rather than being misread as some other number.</p>
+
+  <p>Each outline needs at least three points.</p>
+
+  <h2>What it skips</h2>
+  <ul>
+    <li>A number with no matching record in its target layer, or matching more than one.</li>
+    <li>An <code>SU</code>- or <code>F</code>-prefixed point that isn't an outline vertex, like a single labelled shot with no increment. Skipped with a warning; the rest of the file still runs.</li>
+    <li>An outline whose points repeat an increment number, since the order is ambiguous. That one outline alone is skipped.</li>
+  </ul>
+  <p>Only a genuinely unusable table stops the run: one missing <code>Name</code>, or missing both coordinate pairs.</p>
+
+  <h2>Known limits</h2>
+  <ul>
+    <li>Uncrossing produces <em>a</em> polygon that doesn't cross itself, which is not always the one you dug. Check the result against QC points before saving.</li>
+    <li>A point layer loaded in the project is read from its <code>Name</code> and coordinate <em>columns</em>, not from its geometry.</li>
+    <li>If a target layer's CRS can't be resolved, the tool assumes it already matches EPSG:32636 rather than reprojecting.</li>
+  </ul>
+</main>
+
+<footer>
+  <span><a href="https://github.com/amcgallian/tkap-qgis">Source on GitHub</a></span>
+  <span>GPL-2.0-or-later</span>
+</footer>
+</body>
+</html>

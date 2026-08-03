@@ -29,15 +29,22 @@ WGS84_EPSG = 4326
 # the SU number on a different layer, and renaming any of them would break
 # reading data that already exists:
 #
-#   SU_FIELD_EMLID_TARGET  the SU polygon layer the Emlid tool writes geometry
-#                          back onto
-#   SU_FIELD_PHASING       the master SU polygon layer the phasing tool reads
-#   SU_FIELD_SECTION       the section-drawing polygons written into a
-#                          section GeoPackage
+#   SU_FIELD_POINTS_TARGET  the SU polygon layer the Survey Points tool writes
+#                           geometry back onto
+#   SU_FIELD_PHASING        the master SU polygon layer the phasing tool reads
+#   SU_FIELD_SECTION        the section-drawing polygons written into a
+#                           section GeoPackage
 #
 # They live here so the difference is visible in one place instead of being
 # three unrelated string literals in three tools.
 
-SU_FIELD_EMLID_TARGET = "SU"
+SU_FIELD_POINTS_TARGET = "SU"
 SU_FIELD_PHASING = "sunumber"
 SU_FIELD_SECTION = "su_number"
+
+#: The feature number on the project's Features polygon layer -- the Survey
+#: Points tool's second target, alongside the SU layer above. Features are
+#: recorded and numbered separately from SUs (they carry no ``space_phase``,
+#: which is why the phasing tool cannot split them), so they live on their own
+#: layer with their own numbering, and F_ points match against this field.
+FEATURE_FIELD_POINTS_TARGET = "Feature"

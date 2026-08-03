@@ -1,30 +1,30 @@
 <?xml version='1.0' encoding='utf-8'?>
 <plugins>
-  <pyqgis_plugin name="TKAP Tools" version="1.0.0">
-    <description>Field tools for the Türkmen-Karahöyük Archaeological Project: stratigraphic phasing, section drawing, and Emlid GNSS point conversion.</description>
-    <about>The TKAP QGIS toolset, shipped as one plugin so the tools stay in step with the project's Stratigraphic Unit schema. Three tools live under the TKAP Tools menu:
+  <pyqgis_plugin name="TKAP Tools" version="1.1.0">
+    <description>Field tools for the Türkmen-Karahöyük Archaeological Project: stratigraphic phasing, section drawing, and GNSS survey point conversion.</description>
+    <about>The TKAP QGIS tools. Three tools live under the TKAP Tools menu:
 
-Stratigraphic Phasing -- splits a layer of Stratigraphic Units into one layer per phase for a chosen excavation field, parsing the delimited space_phase attribute. An SU spanning several phases is written into every phase layer it belongs to. Output goes to live filtered layers, scratch layers, or a GeoPackage. A second action exports one phase plan per layer from a print layout you designed.
+Stratigraphic Phasing: splits a layer of Stratigraphic Units into one layer per phase for a chosen excavation field, parsing the delimited space_phase attribute. An SU spanning several phases is written into every phase layer it belongs to. Output goes to live filtered layers, scratch layers, or a GeoPackage. A second action exports one phase plan per layer from a print layout you designed.
 
-Section Drawing -- draw a section trace in plan view, pick the SUs that cross it, place a photo of the excavation wall using surveyed control points, and digitise SU polygons against absolute elevation. Outputs a measured drawing and a wireframe-over-photo version, both with an elevation axis. Newer than the other two tools; treat as beta.
+Section Drawing: draw a section trace in plan view, pick the SUs that cross it, place a photo of the excavation wall using surveyed control points, and digitise SU polygons against absolute elevation. Outputs a measured drawing and a wireframe-over-photo version, both with an elevation axis. Newer than the other two tools; treat as beta.
 
-Emlid to SU -- reads Emlid GNSS point exports and connects each SU's points in increment order into a closed polygon, either replacing geometry on an existing SU layer or building onto a new temporary layer.
+Survey Points to Polygons: reads Emlid GNSS point exports and connects each outline's points in increment order into a closed polygon. Handles both SU_ points and F_ feature points in one pass, each against its own target layer, either replacing geometry on the existing layers or building onto new temporary ones. An outline shot out of perimeter order is reordered to uncross itself before the polygon is built.
 
 Licensed GPL-2.0-or-later. See LICENSE in the plugin folder.</about>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
     <qgis_minimum_version>3.34</qgis_minimum_version>
     <homepage>https://github.com/amcgallian/tkap-qgis</homepage>
     <author_name>Türkmen-Karahöyük Archaeological Project (TKAP)</author_name>
     <author_email>andymcgallian@gmail.com</author_email>
     <tracker>https://github.com/amcgallian/tkap-qgis/issues</tracker>
     <repository>https://github.com/amcgallian/tkap-qgis</repository>
-    <tags>archaeology,stratigraphy,excavation,section,emlid,gnss,survey,geometry,polygon</tags>
+    <tags>archaeology,stratigraphy,excavation,section,emlid,gnss,survey,geometry,polygon,feature</tags>
     <experimental>False</experimental>
     <deprecated>False</deprecated>
     <file_name>tkap_tools.zip</file_name>
-    <download_url>https://github.com/amcgallian/tkap-qgis/releases/download/v1.0.0/tkap_tools.zip</download_url>
+    <download_url>https://github.com/amcgallian/tkap-qgis/releases/download/v1.1.0/tkap_tools.zip</download_url>
     <uploaded_by>Türkmen-Karahöyük Archaeological Project (TKAP)</uploaded_by>
-    <create_date>2026-08-03T07:31:08.704012</create_date>
-    <update_date>2026-08-03T07:31:08.704012</update_date>
+    <create_date>2026-08-03T08:14:05.212995</create_date>
+    <update_date>2026-08-03T08:14:05.212995</update_date>
   </pyqgis_plugin>
 </plugins>

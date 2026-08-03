@@ -35,7 +35,7 @@ REQUIRED_KEYS = (
 # Every tool has to be in the zip. Shipping a build that quietly lost one is the
 # specific failure this catches: the plugin would install, load, and simply be
 # missing a menu entry, which nobody notices until they need that tool.
-REQUIRED_TOOLS = ("emlid", "phasing", "section", "common")
+REQUIRED_TOOLS = ("points", "phasing", "section", "common")
 
 
 def collect():

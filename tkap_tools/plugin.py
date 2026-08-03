@@ -50,7 +50,7 @@ class ToolSpec:
 # Order here is the order in the menu: roughly the order of a season's work --
 # get the survey points in, phase what has been dug, then draw the sections.
 TOOLS = (
-    ToolSpec("emlid", "Emlid to SU", ".emlid.emlid_to_su_plugin", "EmlidToSuPlugin"),
+    ToolSpec("points", "Survey Points to Polygons", ".points.plugin", "SurveyPointsPlugin"),
     ToolSpec("phasing", "Stratigraphic Phasing", ".phasing.phase_blaster", "TkapPhasingPlugin"),
     ToolSpec("section", "Section Drawing", ".section.plugin", "TkapSectionPlugin"),
 )
@@ -161,9 +161,9 @@ class TkapToolsPlugin:
         try:
             # import_module, not __import__: the latter takes a relative name
             # WITHOUT its leading dot when given a level, so passing
-            # ".emlid.emlid_to_su_plugin" there resolves to "tkap_tools." and
-            # fails. import_module wants the dot and reads the package from the
-            # second argument.
+            # ".points.plugin" there resolves to "tkap_tools." and fails.
+            # import_module wants the dot and reads the package from the second
+            # argument.
             module = importlib.import_module(spec.module, __package__)
             tool = getattr(module, spec.attr)(self.iface)
             actions = tool.actions(self.iface.mainWindow())
