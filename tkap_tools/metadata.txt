@@ -26,7 +26,7 @@ about=The TKAP QGIS tools. Three tools live under the TKAP Tools
     uncross itself before the polygon is built.
     .
     Licensed GPL-2.0-or-later. See LICENSE in the plugin folder.
-version=1.4.0
+version=1.4.1
 author=Türkmen-Karahöyük Archaeological Project (TKAP)
 email=andymcgallian@gmail.com
 
@@ -41,7 +41,23 @@ experimental=False
 deprecated=False
 hasProcessingProvider=no
 
-changelog=1.4.0
+changelog=1.4.1
+    - Fix: the wireframe backdrop colour appeared to do nothing. It was being
+      drawn correctly, but a placed ortho is axis-aligned and fills the frame,
+      so the backdrop sat behind it with nothing to show through. There is now
+      a "Fade the photo" setting next to it, which knocks the photo back
+      towards the backdrop so the outlines read over a bright wall - and which
+      is what makes the backdrop colour mean anything.
+    - Fix: most of the export controls did not redraw the preview. The frame
+      box, the height-line interval, every label and caption control and all
+      the wireframe colours changed the output without changing the picture of
+      it. They all redraw now. Resolution deliberately does not, since the
+      preview renders at its own.
+    - Section Drawing: the unit table's columns can be dragged to any width,
+      and reordered. They were fixed to their contents or stretched, which on a
+      seven-column table in a narrow dock meant the column you needed to read
+      was the one you could not widen.
+    1.4.0
     - Section Drawing: units can be given a name of their own, and each unit
       decides for itself what the drawing writes on it. Type a name into the new
       Label column - "rocky fill" rather than a number - and set the Shows

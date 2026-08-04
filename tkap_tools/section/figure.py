@@ -146,7 +146,13 @@ class FigureSpec:
     #: is unreadable over a pale sunlit one, which is why they are settable.
     outline_colour: str = "255,255,0,255"
     outline_width: float = 0.6
+    #: What shows behind the photo. On its own this is nearly invisible: a
+    #: placed ortho is axis-aligned and fills the frame, so there is nothing
+    #: behind it to see. ``photo_fade`` is what lets it through.
     background_colour: str = "20,20,20"
+    #: How far to knock the photo back, 0.0 (untouched) to 1.0 (gone), letting
+    #: the backdrop through and the outlines read against it.
+    photo_fade: float = 0.0
 
     #: The line under the title. None means the generated one (facing and
     #: scale); anything else is used verbatim, and "" leaves it off.
@@ -372,6 +378,22 @@ def _reads_only_available(renderer, available: set[str]) -> bool:
     return bool(used) and used.issubset(available)
 
 
+def _photo_style(layer, opacity: float) -> str:
+    """QML for the photo on a wireframe plate, at a given opacity.
+
+    A style override rather than setting the layer's opacity directly, for the
+    same reason the polygon styles are overrides: the layout stays in the Layout
+    Manager after the export, so mutating the live layer and putting it back
+    would leave the retained layout showing something the user never chose.
+    """
+    original = layer.opacity()
+    layer.setOpacity(max(0.0, min(1.0, opacity)))
+    doc = QDomDocument()
+    layer.exportNamedStyle(doc, QgsReadWriteContext())
+    layer.setOpacity(original)
+    return doc.toString()
+
+
 def _frame_style(layer, kind: str) -> str:
     """QML for the section limits on paper.
 
@@ -548,6 +570,12 @@ def build_layout(session, spec: FigureSpec, source_layer=None) -> QgsPrintLayout
         overrides[frame.id()] = _frame_style(frame, spec.kind)
     if spec.kind == WIREFRAME and session.photo_layer is not None:
         layers.append(session.photo_layer)
+        if spec.photo_fade > 0.0:
+            # Fading the photo is what makes the backdrop visible at all, and
+            # what makes the outlines read over a bright wall.
+            overrides[session.photo_layer.id()] = _photo_style(
+                session.photo_layer, 1.0 - spec.photo_fade
+            )
 
     map_item.setLayers(layers)
     map_item.setLayerStyleOverrides(overrides)

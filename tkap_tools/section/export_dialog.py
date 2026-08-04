@@ -12,7 +12,7 @@ rather than making the user export, look, and come back.
 
 from __future__ import annotations
 
-from qgis.PyQt.QtCore import QSettings, QSize, Qt, QTimer
+from qgis.PyQt.QtCore import QSettings, QSize, Qt, QTimer, pyqtSignal
 from qgis.PyQt.QtGui import QColor, QPixmap
 from qgis.PyQt.QtWidgets import (
     QCheckBox,
@@ -85,6 +85,10 @@ class _ColourButton(QPushButton):
     two swatches on one dialog.
     """
 
+    #: So the preview can redraw when a colour is picked. QPushButton has no
+    #: such signal of its own, and `clicked` fires before the choice is made.
+    colourChanged = pyqtSignal()
+
     def __init__(self, colour: QColor, parent=None) -> None:
         super().__init__(parent)
         self._colour = QColor(colour)
@@ -98,8 +102,11 @@ class _ColourButton(QPushButton):
         return QColor(self._colour)
 
     def set_colour(self, colour: QColor) -> None:
+        if QColor(colour) == self._colour:
+            return
         self._colour = QColor(colour)
         self._refresh()
+        self.colourChanged.emit()
 
     def _refresh(self) -> None:
         # A readable name on the swatch, in whichever of black or white stands
@@ -147,6 +154,9 @@ class ExportDialog(QDialog):
         # size has to be in place before the handler reads it to work out the
         # scale and refresh the report.
         self.load_settings()
+        # After the settings load, so restoring them does not queue a redraw
+        # per control before the dialog is even on screen.
+        self._connect_preview()
         # Once, after every widget exists: the page handler reads the scale and
         # content controls, which are built after the page box.
         self._on_page_changed()
@@ -240,6 +250,38 @@ class ExportDialog(QDialog):
         return box
 
     # ---------------------------------------------------------------- preview --
+
+    def _connect_preview(self) -> None:
+        """Make every control redraw the preview.
+
+        One list rather than a connection next to each widget, because the
+        controls added over time were each wired to whatever seemed relevant at
+        the time and half of them ended up redrawing nothing -- the frame box,
+        the graticule, all the label and caption controls, and every wireframe
+        colour. The preview is meant to be the answer to "what will this do",
+        so anything that changes the drawing belongs here.
+
+        Resolution is deliberately absent: the preview renders at its own DPI,
+        so changing the export DPI cannot alter it and a redraw would only look
+        like something happened.
+        """
+        signals = [
+            self.graticule_spin.valueChanged,
+            self.frame_check.toggled,
+            self.labels_check.toggled,
+            self.label_size_spin.valueChanged,
+            self.auto_caption.toggled,
+            self.caption_edit.textChanged,
+        ]
+        if self.kind != DIGITIZED:
+            signals += [
+                self.outline_button.colourChanged,
+                self.outline_width_spin.valueChanged,
+                self.background_button.colourChanged,
+                self.photo_fade_spin.valueChanged,
+            ]
+        for signal in signals:
+            signal.connect(self._schedule_preview)
 
     def _schedule_preview(self, *_args) -> None:
         """Coalesce rapid changes into one render.
@@ -488,9 +530,22 @@ class ExportDialog(QDialog):
 
         self.background_button = _ColourButton(QColor(20, 20, 20))
         self.background_button.setToolTip(
-            "Shows wherever the photo does not reach inside the frame."
+            "What sits behind the photo. Raise the fade below to let it "
+            "through - a placed ortho fills the frame, so with the photo at "
+            "full strength there is nothing behind it to see."
         )
         form.addRow("Backdrop", self.background_button)
+
+        self.photo_fade_spin = QSpinBox()
+        self.photo_fade_spin.setRange(0, 100)
+        self.photo_fade_spin.setSingleStep(5)
+        self.photo_fade_spin.setSuffix(" %")
+        self.photo_fade_spin.setValue(0)
+        self.photo_fade_spin.setToolTip(
+            "Knocks the photo back towards the backdrop colour, so the "
+            "outlines read over a bright wall. 0% leaves it untouched."
+        )
+        form.addRow("Fade the photo", self.photo_fade_spin)
         return box
 
     def _auto_caption_text(self) -> str:
@@ -633,6 +688,10 @@ class ExportDialog(QDialog):
                 _colour_to_text(self.background_button.colour()) if wireframe
                 else FigureSpec.background_colour
             ),
+            photo_fade=(
+                self.photo_fade_spin.value() / 100.0 if wireframe
+                else FigureSpec.photo_fade
+            ),
         )
 
     # ------------------------------------------------------------- settings --
@@ -671,6 +730,7 @@ class ExportDialog(QDialog):
             values["background_colour"] = _colour_to_text(
                 self.background_button.colour()
             )
+            values["photo_fade"] = self.photo_fade_spin.value()
         for name, value in values.items():
             settings.setValue(self._settings_key(name), value)
 
@@ -747,6 +807,8 @@ class ExportDialog(QDialog):
                 value("outline_width", self.outline_width_spin.value(), float))
             self.background_button.set_colour(_colour_from_text(
                 value("background_colour", ""), self.background_button.colour()))
+            self.photo_fade_spin.setValue(
+                value("photo_fade", self.photo_fade_spin.value(), int))
 
     def accept(self) -> None:
         self.save_settings()

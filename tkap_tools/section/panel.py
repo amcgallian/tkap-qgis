@@ -47,6 +47,12 @@ SEED_COLOURS = {
 }
 
 
+#: Starting width of each roster column, in pixels: Show, SU, Label, Shows,
+#: Type, Base, Top. Only a starting point -- every column can be dragged, and
+#: the last one takes whatever is left over.
+COLUMN_WIDTHS = (46, 52, 130, 110, 120, 74, 74)
+
+
 def _list_sus(numbers, limit: int = 6) -> str:
     """'SU 12, SU 15 and 3 more' -- a roster change named, not just counted."""
     numbers = [str(n) for n in numbers]
@@ -125,10 +131,18 @@ class SectionPanel(QDockWidget):
         )
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.Stretch)   # Label
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Shows
-        header.setSectionResizeMode(4, QHeaderView.Stretch)   # Type
+        # Every column is draggable. Stretch and ResizeToContents both look
+        # tidy and both refuse to be dragged, which on a seven-column table in
+        # a narrow dock means whichever column you need to read is the one you
+        # cannot widen. Interactive everywhere, sized sensibly to start with,
+        # and the last column takes up the slack.
+        for column in range(self.table.columnCount()):
+            header.setSectionResizeMode(column, QHeaderView.Interactive)
+        for column, width in enumerate(COLUMN_WIDTHS):
+            header.resizeSection(column, width)
+        header.setStretchLastSection(True)
+        header.setMinimumSectionSize(28)
+        header.setSectionsMovable(True)
         self.table.itemSelectionChanged.connect(self._on_selection)
         self.table.itemChanged.connect(self._on_item_changed)
         units_layout.addWidget(self.table, 1)
