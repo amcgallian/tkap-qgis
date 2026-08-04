@@ -76,6 +76,24 @@ SCALEBAR_SUBDIVISIONS_LEFT = 4     # the left metre, quartered
 SCALEBAR_TOTAL_M = SCALEBAR_SEGMENT_M * (1 + SCALEBAR_SEGMENTS_RIGHT)
 
 
+def _colour(spec_value: str, fallback: QColor) -> QColor:
+    """Parse an 'r,g,b' or 'r,g,b,a' string into a QColor, or fall back.
+
+    Colours travel through FigureSpec as strings because that is the form
+    QgsFillSymbol.createSimple wants and the form settings persist as; a bad
+    one should soften the drawing, not stop the export.
+    """
+    try:
+        parts = [int(p) for p in str(spec_value).split(",")]
+    except (TypeError, ValueError):
+        return fallback
+    if len(parts) == 3:
+        parts.append(255)
+    if len(parts) != 4 or any(not 0 <= p <= 255 for p in parts):
+        return fallback
+    return QColor(*parts)
+
+
 def scalebar_layout(section_length_m: float) -> tuple[float, int, int]:
     """(metres per segment, whole segments right, subdivisions of the left one).
 
@@ -118,6 +136,21 @@ class FigureSpec:
     show_scalebar: bool = True
     show_frame: bool = True
     dpi: int = 300
+
+    #: Labels. *What* each unit says is chosen per unit, in the panel; the
+    #: figure only decides whether they are drawn at all and how big.
+    show_labels: bool = True
+    label_size: float = 8.0
+
+    #: The wireframe's colours. Yellow on near-black suits most wall photos and
+    #: is unreadable over a pale sunlit one, which is why they are settable.
+    outline_colour: str = "255,255,0,255"
+    outline_width: float = 0.6
+    background_colour: str = "20,20,20"
+
+    #: The line under the title. None means the generated one (facing and
+    #: scale); anything else is used verbatim, and "" leaves it off.
+    caption: str | None = None
 
     @property
     def kind_label(self) -> str:
@@ -202,23 +235,37 @@ def choose_scale(width_m: float, height_m: float, spec: FigureSpec) -> float:
     return fit_scale(width_m, height_m, spec)
 
 
-def _outline_only_style(layer) -> str:
+def _labelling_for(spec: FigureSpec, kind: str):
+    """The labelling a figure should carry, or None when labels are off."""
+    if not spec.show_labels:
+        return None
+    return _print_labelling(kind, spec.label_size)
+
+
+def _outline_only_style(layer, spec: FigureSpec | None = None) -> str:
     """QML for the wireframe pass: outlines and labels, no fill.
 
     Returned as a style-override string so the layer itself is never restyled --
     the user's editing view keeps whatever they were looking at.
     """
+    spec = spec or FigureSpec(title="", kind=WIREFRAME)
     original = layer.renderer().clone()
     original_opacity = layer.opacity()
     original_labeling = layer.labeling().clone() if layer.labeling() else None
+    original_labels_enabled = layer.labelsEnabled()
     # Set explicitly rather than relying on whatever the layer happens to carry,
-    # so the wireframe is guaranteed to come out labelled.
-    layer.setLabeling(_print_labelling(WIREFRAME))
+    # so the wireframe comes out labelled exactly as asked for.
+    labelling = _labelling_for(spec, WIREFRAME)
+    if labelling is None:
+        layer.setLabelsEnabled(False)
+    else:
+        layer.setLabeling(labelling)
+        layer.setLabelsEnabled(True)
 
     symbol = QgsFillSymbol.createSimple({
         "color": "0,0,0,0",
-        "outline_color": "255,255,0,255",
-        "outline_width": "0.6",
+        "outline_color": spec.outline_colour,
+        "outline_width": str(spec.outline_width),
         "outline_width_unit": "Point",
     })
     # A whole new renderer, not a symbol swap: the layer may be carrying a
@@ -233,6 +280,7 @@ def _outline_only_style(layer) -> str:
     layer.setOpacity(original_opacity)
     if original_labeling is not None:
         layer.setLabeling(original_labeling)
+    layer.setLabelsEnabled(original_labels_enabled)
     return doc.toString()
 
 
@@ -373,17 +421,24 @@ def _print_labelling(kind: str, size: float = 8.0):
     return QgsVectorLayerSimpleLabeling(settings)
 
 
-def _filled_style(layer, source_layer=None) -> str:
+def _filled_style(layer, source_layer=None, spec: FigureSpec | None = None) -> str:
     """QML for the clean pass.
 
     Cloning the SU layer's symbology means the section drawing comes out
     matching the plan drawings the project already produces, and the legend
     names the same categories.
     """
+    spec = spec or FigureSpec(title="", kind=DIGITIZED)
     original = layer.renderer().clone()
     original_labeling = layer.labeling().clone() if layer.labeling() else None
     original_opacity = layer.opacity()
-    layer.setLabeling(_print_labelling(DIGITIZED))
+    original_labels_enabled = layer.labelsEnabled()
+    labelling = _labelling_for(spec, DIGITIZED)
+    if labelling is None:
+        layer.setLabelsEnabled(False)
+    else:
+        layer.setLabeling(labelling)
+        layer.setLabelsEnabled(True)
     # The drawing layer is held semi-transparent so the photo shows through
     # while tracing. A finished clean drawing has no photo, so it goes solid.
     layer.setOpacity(1.0)
@@ -402,6 +457,7 @@ def _filled_style(layer, source_layer=None) -> str:
     layer.setOpacity(original_opacity)
     if original_labeling is not None:
         layer.setLabeling(original_labeling)
+    layer.setLabelsEnabled(original_labels_enabled)
     return doc.toString()
 
 
@@ -437,10 +493,15 @@ def build_layout(session, spec: FigureSpec, source_layer=None) -> QgsPrintLayout
                                       TITLE_HEIGHT_MM, QgsUnitTypes.LayoutMillimeters))
     layout.addLayoutItem(title)
 
+    # The viewing direction and the scale, and nothing else. This line used to
+    # restate the trace -- name, azimuth in degrees, length -- which is data
+    # about how the drawing was made rather than anything read off it. Which way
+    # you are looking at the wall is the one fact a section caption genuinely
+    # has to carry, and it was the one thing missing.
     subtitle = QgsLayoutItemLabel(layout)
     subtitle.setText(
-        f"{line.name} | azimuth {line.azimuth:.0f} deg | {line.length:.2f} m | "
-        f"1:{denom} | elevations in metres"
+        f"Looking {line.facing_name} · 1:{denom:g}" if spec.caption is None
+        else spec.caption
     )
     sfont = QFont()
     sfont.setPointSize(8)
@@ -475,8 +536,9 @@ def build_layout(session, spec: FigureSpec, source_layer=None) -> QgsPrintLayout
     if session.polygon_layer is not None:
         layers.append(session.polygon_layer)
         overrides[session.polygon_layer.id()] = (
-            _outline_only_style(session.polygon_layer) if spec.kind == WIREFRAME
-            else _filled_style(session.polygon_layer, source_layer)
+            _outline_only_style(session.polygon_layer, spec)
+            if spec.kind == WIREFRAME
+            else _filled_style(session.polygon_layer, source_layer, spec)
         )
     # The section limits, drawn under the units so it reads as the edge of the
     # surface rather than as another unit boundary.
@@ -503,7 +565,7 @@ def build_layout(session, spec: FigureSpec, source_layer=None) -> QgsPrintLayout
         QgsLayoutMeasurement(0.3, QgsUnitTypes.LayoutMillimeters)
     )
     if spec.kind == WIREFRAME:
-        map_item.setBackgroundColor(QColor(20, 20, 20))
+        map_item.setBackgroundColor(_colour(spec.background_colour, QColor(20, 20, 20)))
     layout.addLayoutItem(map_item)
 
     _add_elevation_grid(map_item, spec)

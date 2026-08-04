@@ -26,6 +26,13 @@ from typing import Iterable, Sequence
 Coord2 = tuple[float, float]
 Coord3 = tuple[float, float, float]
 
+#: Compass points for the direction a section is viewed from, starting at north
+#: and running clockwise in 45-degree steps.
+COMPASS_POINTS = (
+    "north", "north-east", "east", "south-east",
+    "south", "south-west", "west", "north-west",
+)
+
 #: Smallest frame either axis may be cropped to, in metres. Small enough never
 #: to obstruct a real section, large enough that a mis-drag cannot collapse the
 #: drawing surface to nothing and take the export's scale with it.
@@ -96,6 +103,28 @@ class SectionLine:
     @property
     def midpoint(self) -> Coord2:
         return ((self.p0[0] + self.p1[0]) / 2.0, (self.p0[1] + self.p1[1]) / 2.0)
+
+    @property
+    def facing_azimuth(self) -> float:
+        """Grid azimuth of the direction the drawn face is viewed from.
+
+        You stand off the wall and look at it, so the viewing direction is the
+        normal, not the trace. Unflipped, the face is on your left as you walk
+        p0 -> p1, which is 90 degrees anticlockwise of the trace; flipping puts
+        you on the other side, looking back the other way.
+        """
+        return (self.azimuth + (90.0 if self.flipped else -90.0)) % 360.0
+
+    @property
+    def facing_name(self) -> str:
+        """The viewing direction in words: 'north', 'south-east', and so on.
+
+        Eight points, which is what a section caption says. Sixteen would claim
+        a precision the drawing does not have -- a trace is set by two clicks in
+        plan view, so 'north-north-east' would be over-reading it.
+        """
+        index = int(((self.facing_azimuth + 22.5) % 360.0) // 45.0)
+        return COMPASS_POINTS[index]
 
     @property
     def looks_left(self) -> bool:

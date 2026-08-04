@@ -13,6 +13,7 @@ from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QCheckBox,
     QDockWidget,
     QDoubleSpinBox,
@@ -29,6 +30,7 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
+from .session import LABEL_MODES
 from .su_source import SeedSource
 
 GOOD = QColor(60, 160, 60)
@@ -84,6 +86,10 @@ class SectionPanel(QDockWidget):
         self._frame_updating = False
         #: Same, for the SU layer combo.
         self._source_updating = False
+        #: Set while the roster table is being rebuilt. The table's own
+        #: blockSignals does not reach cell widgets, so the per-row label combos
+        #: would otherwise fire on creation and write their defaults back.
+        self._populating = False
         self.setObjectName("TkapSectionPanel")
         self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
 
@@ -106,9 +112,9 @@ class SectionPanel(QDockWidget):
         units_layout = QVBoxLayout(units_box)
         layout.addWidget(units_box, 1)
 
-        self.table = QTableWidget(0, 5)
+        self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(
-            ["Show", "SU", "Type", "Base", "Top"]
+            ["Show", "SU", "Label", "Shows", "Type", "Base", "Top"]
         )
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         # Base and Top are typed straight into the cell; everything else is
@@ -120,12 +126,18 @@ class SectionPanel(QDockWidget):
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)   # Label
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Shows
+        header.setSectionResizeMode(4, QHeaderView.Stretch)   # Type
         self.table.itemSelectionChanged.connect(self._on_selection)
         self.table.itemChanged.connect(self._on_item_changed)
         units_layout.addWidget(self.table, 1)
 
-        hint = QLabel("Type a Base or Top value to move a unit to that height.")
+        hint = QLabel(
+            "Type a Base or Top value to move a unit to that height. Type a "
+            "Label to name a unit something other than its number, and use "
+            "Shows to choose what the drawing writes on it."
+        )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: grey; font-size: 10px;")
         units_layout.addWidget(hint)
@@ -508,10 +520,14 @@ class SectionPanel(QDockWidget):
         # Repopulating fires itemChanged for every cell; without this the
         # handlers would run against half-built rows.
         self.table.blockSignals(True)
-        self.table.setRowCount(len(cands))
-        for row, cand in enumerate(cands):
-            self._fill_row(row, cand)
-        self.table.blockSignals(False)
+        self._populating = True
+        try:
+            self.table.setRowCount(len(cands))
+            for row, cand in enumerate(cands):
+                self._fill_row(row, cand)
+        finally:
+            self._populating = False
+            self.table.blockSignals(False)
         self.refresh_frame()
 
     def _fill_row(self, row: int, cand) -> None:
@@ -528,15 +544,50 @@ class SectionPanel(QDockWidget):
         show.setData(Qt.UserRole, cand.su_id)
         self.table.setItem(row, 0, show)
 
-        for col, text in ((1, cand.su_number), (2, cand.describe_type())):
+        for col, text in ((1, cand.su_number), (4, cand.describe_type())):
             item = QTableWidgetItem(text)
             item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             if not present:
                 item.setForeground(BAD)
             self.table.setItem(row, col, item)
 
+        # The unit's own name for the drawing, free text and editable.
+        label_item = QTableWidgetItem(self.session.label_for(cand.su_id))
+        if present:
+            label_item.setFlags(
+                Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsEditable
+            )
+        else:
+            label_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+        label_item.setData(Qt.UserRole, cand.su_id)
+        label_item.setToolTip(
+            "A name for this unit on the drawing. Leave empty to use its "
+            "number, and set Shows to decide which is used."
+        )
+        self.table.setItem(row, 2, label_item)
+
+        # What this one unit's label says. A combo per row rather than one
+        # setting for the drawing: a section usually wants numbers throughout
+        # with two or three units named, and a thin lens left blank.
+        combo = QComboBox()
+        for mode, text in LABEL_MODES:
+            combo.addItem(text, mode)
+        current = self.session.label_mode_for(cand.su_id)
+        index = combo.findData(current)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+        combo.setEnabled(present)
+        combo.setToolTip(
+            "What the drawing writes on this unit. \"Label\" falls back to the "
+            "number when no label has been typed."
+        )
+        combo.currentIndexChanged.connect(
+            lambda _i, c=combo, su_id=cand.su_id: self._on_label_mode_changed(c, su_id)
+        )
+        self.table.setCellWidget(row, 3, combo)
+
         lo, hi = self._current_extent(cand)
-        for col, value in ((3, lo), (4, hi)):
+        for col, value in ((5, lo), (6, hi)):
             item = QTableWidgetItem("" if value is None else f"{value:.3f}")
             if present:
                 item.setFlags(
@@ -571,8 +622,26 @@ class SectionPanel(QDockWidget):
             if su_id is not None:
                 self.session.set_hidden(su_id, item.checkState() != Qt.Checked)
             return
-        if item.column() in (3, 4):
+        if item.column() == 2:
+            su_id = item.data(Qt.UserRole)
+            if su_id is not None:
+                self.session.set_label(su_id, item.text())
+            return
+        if item.column() in (5, 6):
             self._on_extent_typed(item)
+
+    def _on_label_mode_changed(self, combo, su_id) -> None:
+        """Apply a per-unit label choice, unless the table is being rebuilt.
+
+        Cell widgets are not covered by the table's blockSignals, so populating
+        a row fires this; without the guard, refreshing the roster would write
+        every combo's default back over what was chosen.
+        """
+        if self._populating:
+            return
+        mode = combo.currentData()
+        if mode:
+            self.session.set_label_mode_for(su_id, mode)
 
     def _on_extent_typed(self, item) -> None:
         """Apply a typed Base or Top to the unit's polygon."""
@@ -582,8 +651,8 @@ class SectionPanel(QDockWidget):
             return
         cand = cands[row]
 
-        lo_item = self.table.item(row, 3)
-        hi_item = self.table.item(row, 4)
+        lo_item = self.table.item(row, 5)
+        hi_item = self.table.item(row, 6)
         if lo_item is None or hi_item is None:
             return
         try:
@@ -607,8 +676,12 @@ class SectionPanel(QDockWidget):
 
     def _revert_row(self, row: int, cand) -> None:
         self.table.blockSignals(True)
-        self._fill_row(row, cand)
-        self.table.blockSignals(False)
+        self._populating = True
+        try:
+            self._fill_row(row, cand)
+        finally:
+            self._populating = False
+            self.table.blockSignals(False)
 
     def _set_all_visible(self, visible: bool) -> None:
         self.session.set_all_hidden(not visible)

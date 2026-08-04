@@ -59,6 +59,92 @@ FRAME_LAYER_NAME = "Section frame"
 #: expression, so hiding a row hides its label too.
 HIDDEN_FIELD = "hidden"
 
+#: Free text naming a unit on the drawing, typed in the panel's Label column.
+#: Not everything on a section is best called by its number -- a spread of
+#: rubble reads better as "rocky fill" on a published plate -- so a unit can
+#: carry a name of its own and the drawing can be told to use it.
+#:
+#: This field already existed, auto-filled with "SU 123" and read by nothing.
+#: Repurposing it rather than adding a second label field keeps one obvious
+#: place for a unit's name; the derived values are cleared on load, see
+#: :func:`migrate_label`.
+LABEL_FIELD = "label"
+
+#: Per-unit choice of what its label says, held on the polygon itself. One
+#: setting for a whole drawing was the obvious design and the wrong one: a
+#: section usually wants numbers throughout with two or three units named, and
+#: a thin lens often wants no label at all because there is nowhere to put it.
+#: A single mode could express none of that, so the choice lives on the unit.
+LABEL_MODE_FIELD = "label_mode"
+
+#: What one unit's label says.
+LABEL_NUMBER = "number"
+LABEL_TEXT = "label"
+LABEL_BOTH = "both"
+LABEL_NONE = "none"
+
+#: Mode -> how it reads in the panel. Order is the order offered.
+LABEL_MODES = (
+    (LABEL_NUMBER, "Number"),
+    (LABEL_TEXT, "Label"),
+    (LABEL_BOTH, "Number and label"),
+    (LABEL_NONE, "Nothing"),
+)
+LABEL_MODE_KEYS = tuple(mode for mode, _ in LABEL_MODES)
+
+
+def label_expression() -> str:
+    """The expression naming every unit on the drawing.
+
+    One expression for the layer, branching per feature on its own
+    ``label_mode``. Shared by the canvas and both figures, so what is on screen
+    is what comes out.
+
+    Two things it has to get right whatever the mode:
+
+    * a hidden unit resolves to empty text, or a number would float over a
+      polygon that is not being drawn;
+    * an empty label is not a label. ``nullif`` collapses it to NULL so
+      ``coalesce`` falls through to the number, which means a unit set to
+      "Label" but never given one shows its number rather than nothing. Blank
+      is available deliberately, as "Nothing", and should not also happen by
+      accident.
+
+    A unit with no mode recorded -- every unit in a section saved before this
+    existed -- takes the ELSE branch and shows its number, which is what it did
+    before.
+    """
+    text = 'nullif("{}", \'\')'.format(LABEL_FIELD)
+    number = '"su_number"'
+    mode = 'lower(coalesce("{}", \'\'))'.format(LABEL_MODE_FIELD)
+    # " - label" only when there is one, so a unit without a label reads as its
+    # number rather than a number with a dangling separator.
+    both = "concat({}, coalesce(' - ' || {}, ''))".format(number, text)
+    chosen = (
+        "CASE"
+        " WHEN {mode} = '{none}' THEN ''"
+        " WHEN {mode} = '{label}' THEN coalesce({text}, {number})"
+        " WHEN {mode} = '{both_key}' THEN {both}"
+        " ELSE {number} END"
+    ).format(
+        mode=mode, none=LABEL_NONE, label=LABEL_TEXT, both_key=LABEL_BOTH,
+        text=text, number=number, both=both,
+    )
+    return 'if("{}" is 1, \'\', {})'.format(HIDDEN_FIELD, chosen)
+
+
+def migrate_label(value, su_number) -> str:
+    """Clear a label that is really the old auto-derived 'SU 123'.
+
+    Sections saved before the field carried user text have "SU <number>" in it.
+    Left alone, every unit in a reopened section would look as though someone
+    had deliberately named it after its own number.
+    """
+    text = "" if value is None else str(value).strip()
+    if not text or text == "SU {}".format(su_number):
+        return ""
+    return text
+
 #: Layer opacity while drawing, when the SU layer's own symbology is in use.
 #: Those styles are built for opaque plan drawings; here the photo underneath is
 #: the thing being traced and has to stay visible. Restored to full for export.
@@ -77,10 +163,10 @@ def section_label_settings() -> QgsPalLayerSettings:
     like the screen.
     """
     settings = QgsPalLayerSettings()
-    # Just the number: "SU" in front of every polygon is noise on a drawing
-    # whose caption already says these are stratigraphic units. A hidden row's
-    # label goes with it, so text never floats over a polygon that is not drawn.
-    settings.fieldName = f'if("{HIDDEN_FIELD}" is 1, \'\', "su_number")'
+    # Just the number by default: "SU" in front of every polygon is noise on a
+    # drawing whose caption already says these are stratigraphic units. Each
+    # unit can say otherwise for itself -- see label_expression.
+    settings.fieldName = label_expression()
     settings.isExpression = True
 
     # Horizontal keeps the number upright and inside the polygon; centroidInside
@@ -290,7 +376,10 @@ class SectionSession:
         provider.addAttributes([
             QgsField("su_id", QVariant.Int),
             QgsField("su_number", QVariant.String),
-            QgsField("label", QVariant.String),
+            QgsField(LABEL_FIELD, QVariant.String),
+            # Per-unit choice of what its label says. Null in a section saved
+            # before this existed, which the expression reads as "number".
+            QgsField(LABEL_MODE_FIELD, QVariant.String),
             QgsField("su_type", QVariant.String),
             QgsField("subtype", QVariant.String),
             # The project styles SUs on subsubtype, so it has to be here for the
@@ -647,7 +736,10 @@ class SectionSession:
             feat.setGeometry(geom)
             feat["su_id"] = cand.su_id
             feat["su_number"] = cand.su_number
-            feat["label"] = cand.label
+            # Left empty on purpose: this is the user's own name for the unit,
+            # and seeding it with "SU 123" would make every unit look as though
+            # it had been deliberately named after its own number.
+            feat[LABEL_FIELD] = ""
             feat["su_type"] = cand.su_type
             feat["subtype"] = cand.subtype
             feat["subsubtype"] = cand.subsubtype
@@ -742,6 +834,63 @@ class SectionSession:
         cand.alt_min, cand.alt_max = z_min, z_max
         return len(geometries)
 
+    def label_for(self, su_id: int) -> str:
+        """The unit's own name, or empty when it has not been given one."""
+        layer = self.polygon_layer
+        if layer is None:
+            return ""
+        for feat in layer.getFeatures():
+            if feat["su_id"] == su_id:
+                value = feat[LABEL_FIELD]
+                return "" if value is None else str(value)
+        return ""
+
+    def label_mode_for(self, su_id: int) -> str:
+        """What this unit's label says. Defaults to its number."""
+        layer = self.polygon_layer
+        if layer is None:
+            return LABEL_NUMBER
+        for feat in layer.getFeatures():
+            if feat["su_id"] == su_id:
+                value = feat[LABEL_MODE_FIELD]
+                text = "" if value is None else str(value).strip().lower()
+                return text if text in LABEL_MODE_KEYS else LABEL_NUMBER
+        return LABEL_NUMBER
+
+    def set_label_mode_for(self, su_id: int, mode: str) -> int:
+        """Choose what one unit's label says. Returns features changed."""
+        if mode not in LABEL_MODE_KEYS:
+            raise ValueError("Unknown label mode: {!r}".format(mode))
+        return self._set_attribute(su_id, LABEL_MODE_FIELD, mode)
+
+    def set_label(self, su_id: int, text: str) -> int:
+        """Name a unit for the drawing. Returns the number of features changed.
+
+        Written through the provider rather than the edit session, like
+        :meth:`set_hidden`: naming a unit is an annotation, and having it
+        interleaved with geometry in the undo stack would make Ctrl+Z during
+        tracing unpredictable.
+        """
+        return self._set_attribute(su_id, LABEL_FIELD, (text or "").strip())
+
+    def _set_attribute(self, su_id: int, field: str, value) -> int:
+        """Write one attribute on every polygon of an SU. Returns how many."""
+        layer = self.polygon_layer
+        if layer is None:
+            return 0
+        idx = layer.fields().indexOf(field)
+        if idx < 0:
+            return 0
+        changes = {
+            f.id(): {idx: value}
+            for f in layer.getFeatures()
+            if f["su_id"] == su_id
+        }
+        if changes:
+            layer.dataProvider().changeAttributeValues(changes)
+            layer.triggerRepaint()
+        return len(changes)
+
     def set_hidden(self, su_id: int, hidden: bool) -> int:
         """Show or hide an SU's polygons. Hidden ones still snap.
 
@@ -807,6 +956,10 @@ class SectionSession:
             for field_name in fields.names():
                 if field_name in names:
                     feat[field_name] = saved[field_name]
+            if LABEL_FIELD in names:
+                feat[LABEL_FIELD] = migrate_label(
+                    feat[LABEL_FIELD], feat["su_number"]
+                )
             rebuilt.append(feat)
 
         layer.dataProvider().addFeatures(rebuilt)

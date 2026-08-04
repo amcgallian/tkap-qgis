@@ -12,20 +12,24 @@ rather than making the user export, look, and come back.
 
 from __future__ import annotations
 
-from qgis.PyQt.QtCore import QSize, Qt, QTimer
-from qgis.PyQt.QtGui import QPixmap
+from qgis.PyQt.QtCore import QSettings, QSize, Qt, QTimer
+from qgis.PyQt.QtGui import QColor, QPixmap
 from qgis.PyQt.QtWidgets import (
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPushButton,
     QRadioButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -49,6 +53,74 @@ PREVIEW_DPI = 96
 #: Sentinel for the page-size combo: size the sheet to the drawing.
 FIT_TO_DRAWING = "__fit__"
 
+#: Where the last-used export settings live. Keyed by output kind, because a
+#: clean drawing and a wireframe are wanted at different sizes and colours and
+#: sharing one set of remembered values would make each undo the other.
+SETTINGS_PREFIX = "TKAP/section/export"
+
+
+def _colour_to_text(colour: QColor) -> str:
+    return "{},{},{},{}".format(
+        colour.red(), colour.green(), colour.blue(), colour.alpha()
+    )
+
+
+def _colour_from_text(text: str, fallback: QColor) -> QColor:
+    try:
+        parts = [int(p) for p in str(text).split(",")]
+    except (TypeError, ValueError):
+        return fallback
+    if len(parts) == 3:
+        parts.append(255)
+    if len(parts) != 4 or any(not 0 <= p <= 255 for p in parts):
+        return fallback
+    return QColor(*parts)
+
+
+class _ColourButton(QPushButton):
+    """A button showing its colour, opening a picker when pressed.
+
+    QgsColorButton would do this, but it drags in the whole QGIS colour-scheme
+    machinery -- recent colours, project palettes, drag and drop -- for what is
+    two swatches on one dialog.
+    """
+
+    def __init__(self, colour: QColor, parent=None) -> None:
+        super().__init__(parent)
+        self._colour = QColor(colour)
+        self.setFlat(True)
+        self.setMinimumHeight(24)
+        self.setAutoFillBackground(True)
+        self.clicked.connect(self._choose)
+        self._refresh()
+
+    def colour(self) -> QColor:
+        return QColor(self._colour)
+
+    def set_colour(self, colour: QColor) -> None:
+        self._colour = QColor(colour)
+        self._refresh()
+
+    def _refresh(self) -> None:
+        # A readable name on the swatch, in whichever of black or white stands
+        # out against it, so the button says what it is as well as showing it.
+        luma = (0.299 * self._colour.red() + 0.587 * self._colour.green()
+                + 0.114 * self._colour.blue())
+        ink = "#000000" if luma > 140 else "#ffffff"
+        self.setStyleSheet(
+            f"background-color: {self._colour.name()}; color: {ink}; "
+            "border: 1px solid palette(mid);"
+        )
+        self.setText(self._colour.name())
+
+    def _choose(self) -> None:
+        chosen = QColorDialog.getColor(
+            self._colour, self, "Choose a colour",
+            QColorDialog.ShowAlphaChannel,
+        )
+        if chosen.isValid():
+            self.set_colour(chosen)
+
 
 class ExportDialog(QDialog):
     """Collects a :class:`FigureSpec` for one export."""
@@ -71,6 +143,10 @@ class ExportDialog(QDialog):
         self._preview_timer.timeout.connect(self._render_preview)
 
         self._build_ui(default_title)
+        # Settings first, then the page handler: restoring a remembered page
+        # size has to be in place before the handler reads it to work out the
+        # scale and refresh the report.
+        self.load_settings()
         # Once, after every widget exists: the page handler reads the scale and
         # content controls, which are built after the page box.
         self._on_page_changed()
@@ -106,6 +182,10 @@ class ExportDialog(QDialog):
         layout.addWidget(self._build_page_box())
         layout.addWidget(self._build_scale_box())
         layout.addWidget(self._build_content_box())
+        layout.addWidget(self._build_labels_box())
+        layout.addWidget(self._build_caption_box())
+        if self.kind != DIGITIZED:
+            layout.addWidget(self._build_wireframe_box())
 
         self.report = QLabel()
         self.report.setWordWrap(True)
@@ -116,13 +196,29 @@ class ExportDialog(QDialog):
         layout.addWidget(self.report)
 
         layout.addStretch(1)
+
+        # The controls outgrew the window once labels, caption and colours were
+        # added, so the column scrolls and the buttons sit outside it -- the
+        # same arrangement, and the same reason, as the Survey Points dialog.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(left)
+        scroll.setMinimumWidth(left.sizeHint().width() + 24)
+
+        column = QWidget()
+        column_layout = QVBoxLayout(column)
+        column_layout.setContentsMargins(0, 0, 0, 0)
+        column_layout.addWidget(scroll, 1)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.button(QDialogButtonBox.Ok).setText("Export...")
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        column_layout.addWidget(buttons)
 
-        outer.addWidget(left, 0)
+        outer.addWidget(column, 0)
         outer.addWidget(self._build_preview_box(), 1)
 
     def _build_preview_box(self) -> QWidget:
@@ -320,6 +416,94 @@ class ExportDialog(QDialog):
         form.addRow("Resolution", self.dpi_spin)
         return box
 
+    def _build_labels_box(self):
+        """Whether units are labelled at all, and how big.
+
+        *What* each one says is chosen per unit in the panel, not here. A
+        section usually wants numbers throughout with two or three units named
+        and a thin lens left blank, which no single setting can express -- so
+        the only whole-plate controls are the master switch and the type size.
+        """
+        box = QGroupBox("Unit labels")
+        form = QFormLayout(box)
+
+        self.labels_check = QCheckBox("Label the units")
+        self.labels_check.setChecked(True)
+        self.labels_check.setToolTip(
+            "Off gives a clean unlabelled plate, for when the numbers are "
+            "carried in a caption instead. What each unit says is set in the "
+            "panel's Shows column."
+        )
+        self.labels_check.toggled.connect(self._on_labels_toggled)
+        form.addRow("", self.labels_check)
+
+        self.label_size_spin = QDoubleSpinBox()
+        self.label_size_spin.setRange(3.0, 40.0)
+        self.label_size_spin.setDecimals(1)
+        self.label_size_spin.setSingleStep(0.5)
+        self.label_size_spin.setSuffix(" pt")
+        self.label_size_spin.setValue(8.0)
+        form.addRow("Label size", self.label_size_spin)
+        return box
+
+    def _build_caption_box(self):
+        box = QGroupBox("Caption")
+        layout = QVBoxLayout(box)
+
+        self.auto_caption = QCheckBox("Use the automatic caption")
+        self.auto_caption.setChecked(True)
+        self.auto_caption.setToolTip(
+            "Which way the section is viewed, and the scale - e.g. "
+            "\"Looking north · 1:20\"."
+        )
+        self.auto_caption.toggled.connect(self._on_caption_toggled)
+        layout.addWidget(self.auto_caption)
+
+        self.caption_edit = QLineEdit()
+        self.caption_edit.setPlaceholderText(self._auto_caption_text())
+        self.caption_edit.setEnabled(False)
+        layout.addWidget(self.caption_edit)
+        return box
+
+    def _build_wireframe_box(self):
+        """Colours for the over-photo drawing.
+
+        Yellow on near-black suits most excavation photographs and disappears
+        entirely over a pale sunlit wall, which is the whole reason these are
+        not simply constants.
+        """
+        box = QGroupBox("Wireframe colours")
+        form = QFormLayout(box)
+
+        self.outline_button = _ColourButton(QColor(255, 255, 0))
+        form.addRow("Outlines", self.outline_button)
+
+        self.outline_width_spin = QDoubleSpinBox()
+        self.outline_width_spin.setRange(0.1, 5.0)
+        self.outline_width_spin.setDecimals(2)
+        self.outline_width_spin.setSingleStep(0.1)
+        self.outline_width_spin.setSuffix(" pt")
+        self.outline_width_spin.setValue(0.6)
+        form.addRow("Outline width", self.outline_width_spin)
+
+        self.background_button = _ColourButton(QColor(20, 20, 20))
+        self.background_button.setToolTip(
+            "Shows wherever the photo does not reach inside the frame."
+        )
+        form.addRow("Backdrop", self.background_button)
+        return box
+
+    def _auto_caption_text(self) -> str:
+        line = self.session.line
+        return f"Looking {line.facing_name} · 1:{self._current_denominator():g}"
+
+    def _on_labels_toggled(self, on: bool) -> None:
+        self.label_size_spin.setEnabled(on)
+
+    def _on_caption_toggled(self, on: bool) -> None:
+        self.caption_edit.setEnabled(not on)
+        self.caption_edit.setPlaceholderText(self._auto_caption_text())
+
     # ------------------------------------------------------------- behaviour --
 
     def _on_page_changed(self, *_args) -> None:
@@ -386,10 +570,41 @@ class ExportDialog(QDialog):
             return None
         return value if value > 0 else None
 
+    def _current_denominator(self) -> float:
+        """The scale the drawing would come out at as things stand."""
+        if self.fixed_radio.isChecked():
+            fixed = self._fixed_denominator()
+            if fixed:
+                return fixed
+        from .figure import fit_scale
+
+        return fit_scale(self._width_m, self._height_m, self._base_spec())
+
+    def _base_spec(self) -> FigureSpec:
+        """Enough of a spec to work out the scale, without recursing into it."""
+        return FigureSpec(
+            title=self.title_edit.text(),
+            kind=self.kind,
+            page_width=self.width_spin.value(),
+            page_height=self.height_spin.value(),
+            margin=self.margin_spin.value(),
+            snap_scale=self.snap_check.isChecked(),
+            show_legend=self.legend_check.isChecked(),
+            show_scalebar=self.scalebar_check.isChecked(),
+        )
+
     def spec(self) -> FigureSpec:
         denom = None
         if self.fixed_radio.isChecked():
             denom = self._fixed_denominator()
+
+        caption = None
+        if not self.auto_caption.isChecked():
+            # Deliberately allows "": an empty custom caption means no line at
+            # all, which is different from None asking for the generated one.
+            caption = self.caption_edit.text().strip()
+
+        wireframe = self.kind != DIGITIZED
         return FigureSpec(
             title=self.title_edit.text(),
             graticule=self.graticule_spin.value(),
@@ -403,7 +618,139 @@ class ExportDialog(QDialog):
             show_scalebar=self.scalebar_check.isChecked(),
             show_frame=self.frame_check.isChecked(),
             dpi=self.dpi_spin.value(),
+            show_labels=self.labels_check.isChecked(),
+            label_size=self.label_size_spin.value(),
+            caption=caption,
+            outline_colour=(
+                _colour_to_text(self.outline_button.colour()) if wireframe
+                else FigureSpec.outline_colour
+            ),
+            outline_width=(
+                self.outline_width_spin.value() if wireframe
+                else FigureSpec.outline_width
+            ),
+            background_colour=(
+                _colour_to_text(self.background_button.colour()) if wireframe
+                else FigureSpec.background_colour
+            ),
         )
+
+    # ------------------------------------------------------------- settings --
+
+    def _settings_key(self, name: str) -> str:
+        return f"{SETTINGS_PREFIX}/{self.kind}/{name}"
+
+    def save_settings(self) -> None:
+        """Remember the controls, so the next export starts where this left off.
+
+        Title and caption are deliberately not remembered: they name *this*
+        section, and carrying them onto the next one would silently mislabel it.
+        """
+        settings = QSettings()
+        values = {
+            "page": self.page_combo.currentData(),
+            "portrait": self.portrait.isChecked(),
+            "auto_orient": self.auto_orient.isChecked(),
+            "width": self.width_spin.value(),
+            "height": self.height_spin.value(),
+            "margin": self.margin_spin.value(),
+            "fixed_scale": self.fixed_radio.isChecked(),
+            "scale": self.scale_combo.currentText(),
+            "snap": self.snap_check.isChecked(),
+            "graticule": self.graticule_spin.value(),
+            "legend": self.legend_check.isChecked(),
+            "scalebar": self.scalebar_check.isChecked(),
+            "frame": self.frame_check.isChecked(),
+            "dpi": self.dpi_spin.value(),
+            "labels": self.labels_check.isChecked(),
+            "label_size": self.label_size_spin.value(),
+        }
+        if self.kind != DIGITIZED:
+            values["outline_colour"] = _colour_to_text(self.outline_button.colour())
+            values["outline_width"] = self.outline_width_spin.value()
+            values["background_colour"] = _colour_to_text(
+                self.background_button.colour()
+            )
+        for name, value in values.items():
+            settings.setValue(self._settings_key(name), value)
+
+    def load_settings(self) -> None:
+        """Restore the remembered controls. Anything missing keeps its default.
+
+        Every read is guarded: a settings file written by a different version,
+        or edited by hand, must not stop someone exporting a drawing.
+        """
+        settings = QSettings()
+
+        def value(name, default, kind=None):
+            got = settings.value(self._settings_key(name), default)
+            if kind is bool:
+                # QSettings hands booleans back as the strings "true"/"false"
+                # on some platforms and as bool on others.
+                if isinstance(got, str):
+                    return got.lower() == "true"
+                return bool(got)
+            if kind in (int, float):
+                try:
+                    return kind(got)
+                except (TypeError, ValueError):
+                    return default
+            return got
+
+        page = value("page", None)
+        if page is not None:
+            index = self.page_combo.findData(page)
+            if index >= 0:
+                self.page_combo.setCurrentIndex(index)
+
+        self.auto_orient.setChecked(value("auto_orient", self.auto_orient.isChecked(), bool))
+        if value("portrait", self.portrait.isChecked(), bool):
+            self.portrait.setChecked(True)
+        else:
+            self.landscape.setChecked(True)
+        self.width_spin.setValue(value("width", self.width_spin.value(), float))
+        self.height_spin.setValue(value("height", self.height_spin.value(), float))
+        self.margin_spin.setValue(value("margin", self.margin_spin.value(), float))
+
+        if value("fixed_scale", self.fixed_radio.isChecked(), bool):
+            self.fixed_radio.setChecked(True)
+        else:
+            self.fit_radio.setChecked(True)
+        remembered_scale = value("scale", None)
+        if remembered_scale:
+            index = self.scale_combo.findText(str(remembered_scale))
+            if index >= 0:
+                self.scale_combo.setCurrentIndex(index)
+            elif self.scale_combo.isEditable():
+                self.scale_combo.setEditText(str(remembered_scale))
+        self.snap_check.setChecked(value("snap", self.snap_check.isChecked(), bool))
+
+        self.graticule_spin.setValue(
+            value("graticule", self.graticule_spin.value(), float))
+        if self.legend_check.isEnabled():
+            self.legend_check.setChecked(
+                value("legend", self.legend_check.isChecked(), bool))
+        self.scalebar_check.setChecked(
+            value("scalebar", self.scalebar_check.isChecked(), bool))
+        self.frame_check.setChecked(value("frame", self.frame_check.isChecked(), bool))
+        self.dpi_spin.setValue(value("dpi", self.dpi_spin.value(), int))
+
+        self.labels_check.setChecked(value("labels", self.labels_check.isChecked(), bool))
+        self.label_size_spin.setValue(
+            value("label_size", self.label_size_spin.value(), float))
+        self._on_labels_toggled(self.labels_check.isChecked())
+
+        if self.kind != DIGITIZED:
+            self.outline_button.set_colour(_colour_from_text(
+                value("outline_colour", ""), self.outline_button.colour()))
+            self.outline_width_spin.setValue(
+                value("outline_width", self.outline_width_spin.value(), float))
+            self.background_button.set_colour(_colour_from_text(
+                value("background_colour", ""), self.background_button.colour()))
+
+    def accept(self) -> None:
+        self.save_settings()
+        super().accept()
 
     def _update_report(self, *_args) -> None:
         self.snap_check.setEnabled(
