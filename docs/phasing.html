@@ -162,11 +162,6 @@
     <tr><td><code>ph_name</code></td><td>phase name</td></tr>
   </table>
   </div>
-
-  <h2>Layer ordering</h2>
-  <p>Higher phase numbers are earlier in time, because contexts are numbered as they're excavated, so Construction sits at the highest number and Phase 1 is the latest. Layers are inserted in ascending <code>(space, phase)</code> order, which puts the latest phase at the top of the group and keeps <code>Phase10</code> after <code>Phase9</code>.</p>
-  <p>Enable <em>Zero-pad phase numbers</em> if you also want correct alphabetical sorting when browsing the GeoPackage elsewhere.</p>
-
   <h2>Warnings</h2>
   <p>Non-fatal data problems show in the dialog and in <strong>Log Messages</strong> under the <code>TKAP Phasing</code> tab:</p>
   <ul>
@@ -175,13 +170,6 @@
     <li>an SU with no geometry.</li>
   </ul>
   <p>SUs with a blank <code>space_phase</code> are counted as unphased and skipped.</p>
-
-  <h2>From the Python console</h2>
-  <pre><code>from tkap_tools.phasing.phasing_runner import run_phasing, PhasingParams
-from qgis.utils import iface
-
-outcome = run_phasing(PhasingParams(layer=iface.activeLayer(), area_value="6"))
-print(outcome.layer_names)</code></pre>
 </main>
 
 <footer>
