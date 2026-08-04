@@ -35,6 +35,7 @@ from qgis.core import (
     QgsPointXY,
     QgsVectorFileWriter,
     QgsVectorLayer,
+    QgsWkbTypes,
 )
 from qgis.PyQt.QtCore import QVariant
 
@@ -153,7 +154,19 @@ def save_session(session, path: str | Path, *, title: str = "") -> Path:
         session.photo_layer.source() if session.photo_layer is not None else ""
     )
     feat["style_qml"] = session.style_qml or ""
+    source = getattr(session, "source_layer", None)
     feat["extra_json"] = json.dumps({
+        # Which SU layer this was drawn from. Recorded so reopening can find it
+        # again: without it a reopened section had no source layer at all, and
+        # "Add unit..." dead-ended on "this session has no source SU layer".
+        # Three ways to match because each fails differently -- the layer id
+        # changes when the project is rebuilt, the name when someone renames it,
+        # and the source when the data moves.
+        "su_layer": {
+            "id": source.id() if source is not None else "",
+            "name": source.name() if source is not None else "",
+            "source": source.source() if source is not None else "",
+        },
         "candidates": [
             {
                 "su_id": int(c.su_id),
@@ -281,6 +294,55 @@ def read_metadata(path: str | Path) -> dict:
     except (TypeError, ValueError):
         data["extra"] = {}
     return data
+
+
+def find_source_layer(meta: dict):
+    """The SU layer a saved section was drawn from, if it is in the project.
+
+    Returns (layer, how) where ``how`` names the match for reporting, or
+    (None, reason) when nothing suitable is loaded. Sections saved before the
+    source layer was recorded simply have nothing to match on, which is not an
+    error -- the panel lets one be picked either way.
+
+    Matched by id, then by data source, then by name, in falling order of how
+    much they prove. An id is exact but does not survive the project being
+    rebuilt; a data source survives that but not the file moving; a name
+    survives both but is the weakest claim, so it is only accepted when it picks
+    out exactly one layer.
+    """
+    from qgis.core import QgsProject
+
+    saved = (meta.get("extra") or {}).get("su_layer") or {}
+    if not any(saved.get(k) for k in ("id", "source", "name")):
+        return None, "the section was saved before the SU layer was recorded"
+
+    polygons = [
+        layer for layer in QgsProject.instance().mapLayers().values()
+        if isinstance(layer, QgsVectorLayer)
+        and layer.geometryType() == QgsWkbTypes.PolygonGeometry
+    ]
+
+    layer_id = saved.get("id") or ""
+    if layer_id:
+        for layer in polygons:
+            if layer.id() == layer_id:
+                return layer, f"'{layer.name()}'"
+
+    source = saved.get("source") or ""
+    if source:
+        for layer in polygons:
+            if layer.source() == source:
+                return layer, f"'{layer.name()}' (matched on its data source)"
+
+    name = saved.get("name") or ""
+    if name:
+        by_name = [layer for layer in polygons if layer.name() == name]
+        if len(by_name) == 1:
+            return by_name[0], f"'{name}' (matched on name)"
+        if len(by_name) > 1:
+            return None, f"more than one layer is called '{name}'"
+
+    return None, f"'{name or 'the SU layer'}' is not loaded in this project"
 
 
 def line_from_metadata(meta: dict) -> SectionLine:

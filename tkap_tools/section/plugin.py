@@ -25,6 +25,7 @@ from .section_geom import SectionLine
 from .session import SectionSession
 from .setup_dialog import SectionSetupDialog
 from .store import (
+    find_source_layer,
     line_from_metadata,
     load_polygons,
     read_metadata,
@@ -235,6 +236,15 @@ class TkapSectionPlugin:
             lambda title: self._export(WIREFRAME, title)
         )
         self.panel.saveRequested.connect(self._save_session)
+        # The panel can repoint the section at a different SU layer. Export
+        # clones that layer's symbology, so it has to hear about it too, or the
+        # figure would still be built from the layer that was replaced.
+        self.panel.sourceLayerChanged.connect(self._on_source_layer_changed)
+
+    def _on_source_layer_changed(self, layer) -> None:
+        self._source_layer = layer
+        if self.session is not None:
+            self.session.source_layer = layer
 
     # ------------------------------------------------------------ save/open --
 
@@ -295,11 +305,19 @@ class TkapSectionPlugin:
             )
             return
 
+        # Find the SU layer this was drawn from. Without it the reopened
+        # section has nothing to add units from, which is what "this session has
+        # no source SU layer" used to mean -- and it happened every time QGIS
+        # was restarted before opening a saved section.
+        found, how = find_source_layer(meta)
+        source_layer = found or self._source_layer
+        self._source_layer = source_layer
+
         session = SectionSession(
             line=line,
             iface=self.iface,
             space_number=meta.get("space_number") or None,
-            source_layer=self._source_layer,
+            source_layer=source_layer,
             style_qml=meta.get("style_qml") or None,
         )
         try:
@@ -336,11 +354,22 @@ class TkapSectionPlugin:
 
         self.panel = SectionPanel(
             session, self.iface,
-            source_layer=self._source_layer,
+            source_layer=source_layer,
             parent=self.iface.mainWindow(),
         )
         self._connect_panel()
         self.iface.addDockWidget(Qt.RightDockWidgetArea, self.panel)
+
+        if found is None:
+            # Not fatal: the drawing is all there, and the panel's Data sources
+            # box can point it at a layer. Say so rather than leave it to be
+            # discovered later by Add unit... failing.
+            self.iface.messageBar().pushMessage(
+                PLUGIN_NAME,
+                f"Reopened without an SU layer to add units from - {how}. "
+                "Pick one under Data sources in the panel.",
+                level=Qgis.Warning, duration=12,
+            )
 
         session.zoom_to_section()
         session.start_editing()

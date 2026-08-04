@@ -7,6 +7,8 @@ figure outputs and finishing the session).
 
 from __future__ import annotations
 
+from qgis.core import QgsMapLayerProxyModel
+from qgis.gui import QgsCollapsibleGroupBox, QgsMapLayerComboBox
 from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import (
@@ -51,6 +53,8 @@ class SectionPanel(QDockWidget):
     exportDigitized = pyqtSignal(str)         # title; the rest is set in the
     exportWireframe = pyqtSignal(str)         # export dialog
     saveRequested = pyqtSignal()
+    #: The section has been repointed at a different SU layer (or none).
+    sourceLayerChanged = pyqtSignal(object)
 
     def __init__(self, session, iface, source_layer=None, parent=None) -> None:
         super().__init__("Section drawing", parent)
@@ -69,6 +73,8 @@ class SectionPanel(QDockWidget):
         #: Guards the frame spin boxes against re-entering their own handler
         #: while they are being filled in from the session.
         self._frame_updating = False
+        #: Same, for the SU layer combo.
+        self._source_updating = False
         self.setObjectName("TkapSectionPanel")
         self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
 
@@ -135,6 +141,7 @@ class SectionPanel(QDockWidget):
             row.addWidget(b)
         layout.addLayout(row)
 
+        layout.addWidget(self._build_sources_box())
         layout.addWidget(self._build_frame_box())
         layout.addWidget(self._build_output_box())
 
@@ -150,6 +157,84 @@ class SectionPanel(QDockWidget):
 
         self.setWidget(root)
 
+    def _build_sources_box(self) -> QWidget:
+        """Which SU layer this section reads from, and a way to change it.
+
+        A section only carries its *drawing*; the SU layer stays in the project.
+        Reopening one in a fresh QGIS therefore had nothing to add units from,
+        and Add unit... dead-ended. The layer is now recorded when the section is
+        saved and looked up on reopen, but a project that has been rebuilt, or a
+        layer that has been renamed or moved, still needs pointing by hand --
+        which is what this is for.
+        """
+        box = QgsCollapsibleGroupBox("Data sources")
+        # Named so the collapsed state is remembered between sessions.
+        box.setObjectName("TkapSectionSourcesBox")
+        layout = QVBoxLayout(box)
+
+        form = QFormLayout()
+        self.source_combo = QgsMapLayerComboBox()
+        self.source_combo.setFilters(QgsMapLayerProxyModel.PolygonLayer)
+        self.source_combo.setAllowEmptyLayer(True)
+        self.source_combo.setToolTip(
+            "The SU layer this section reads units from. Its symbology is also "
+            "what the exported drawing is styled with."
+        )
+        self.source_combo.layerChanged.connect(self._on_source_combo_changed)
+        form.addRow("SU layer", self.source_combo)
+        layout.addLayout(form)
+
+        restyle = QPushButton("Re-apply symbology")
+        restyle.setToolTip(
+            "Take the section's colours from the SU layer again, or from a "
+            ".qml style file."
+        )
+        restyle.clicked.connect(self._restyle)
+        layout.addWidget(restyle)
+
+        self.source_note = QLabel()
+        self.source_note.setWordWrap(True)
+        self.source_note.setStyleSheet("color: grey; font-size: 10px;")
+        layout.addWidget(self.source_note)
+
+        # Collapsed by default when the layer is already resolved -- there is
+        # nothing to do here in the normal case. Left open when it is not, so a
+        # reopened section that needs pointing says so where the fix is.
+        box.setCollapsed(self.source_layer is not None)
+        self._sources_box = box
+        self._sync_source_widgets()
+        return box
+
+    def _sync_source_widgets(self) -> None:
+        """Put the current source layer into the combo and describe the state."""
+        self._source_updating = True
+        try:
+            self.source_combo.setLayer(self.source_layer)
+        finally:
+            self._source_updating = False
+        if self.source_layer is None:
+            self.source_note.setText(
+                "No SU layer. Units cannot be added and the drawing will export "
+                "with a plain fill until one is chosen."
+            )
+        else:
+            self.source_note.setText(
+                f"Adding units from '{self.source_layer.name()}'."
+            )
+
+    def _on_source_combo_changed(self, layer) -> None:
+        if getattr(self, "_source_updating", False):
+            return
+        self.set_source_layer(layer)
+
+    def set_source_layer(self, layer) -> None:
+        """Repoint the section at an SU layer, telling everything that cares."""
+        self.source_layer = layer
+        self.session.source_layer = layer
+        self._sync_source_widgets()
+        # The plugin holds its own reference for export; keep it in step.
+        self.sourceLayerChanged.emit(layer)
+
     def _build_frame_box(self) -> QWidget:
         """The drawing surface's extent, which is exactly what gets exported.
 
@@ -157,8 +242,14 @@ class SectionPanel(QDockWidget):
         is how you crop against what you can see -- the usual case, where an
         ortho covers more wall than this section. The numbers are for when the
         section has to end at a stated chainage or elevation.
+
+        Collapsible, and collapsed by default: cropping is a thing you do once
+        per section at most, and the four spin boxes were taking up panel height
+        that the SU roster wants.
         """
-        box = QGroupBox("Section frame")
+        box = QgsCollapsibleGroupBox("Section frame")
+        # Named so the collapsed state is remembered between sessions.
+        box.setObjectName("TkapSectionFrameBox")
         layout = QVBoxLayout(box)
 
         form = QFormLayout()
@@ -216,6 +307,7 @@ class SectionPanel(QDockWidget):
         hint.setWordWrap(True)
         hint.setStyleSheet("color: grey; font-size: 10px;")
         layout.addWidget(hint)
+        box.setCollapsed(True)
         return box
 
     # ----------------------------------------------------------------- frame --
@@ -537,11 +629,7 @@ class SectionPanel(QDockWidget):
 
     def _add_sus(self) -> None:
         """Bring SUs into the session that were not picked up at setup."""
-        if self.source_layer is None:
-            QMessageBox.information(
-                self, "No SU layer",
-                "This session has no source SU layer to add from.",
-            )
+        if self.source_layer is None and not self._ask_for_source_layer():
             return
 
         from .add_su_dialog import AddSUDialog
@@ -561,6 +649,46 @@ class SectionPanel(QDockWidget):
             f"Added {added} SU{'s' if added != 1 else ''} to the section.",
             duration=6,
         )
+
+    def _ask_for_source_layer(self) -> bool:
+        """Offer to pick an SU layer right here. True if one was chosen.
+
+        Asked at the point of use rather than left as a refusal: someone who has
+        just reopened a saved section and pressed Add unit... wants the layer
+        chosen, not a message telling them there isn't one.
+        """
+        from qgis.PyQt.QtWidgets import QInputDialog
+        from qgis.core import QgsProject, QgsWkbTypes
+
+        choices = [
+            layer for layer in QgsProject.instance().mapLayers().values()
+            if hasattr(layer, "geometryType")
+            and layer.geometryType() == QgsWkbTypes.PolygonGeometry
+        ]
+        if not choices:
+            QMessageBox.information(
+                self, "No SU layer",
+                "This section has no SU layer to add units from, and there are "
+                "no polygon layers loaded to choose one from.\n\nLoad the SU "
+                "layer into the project, then pick it under Data sources in "
+                "this panel.",
+            )
+            return False
+
+        names = sorted(layer.name() for layer in choices)
+        name, ok = QInputDialog.getItem(
+            self, "Which SU layer?",
+            "This section has no SU layer to add units from.\n"
+            "Pick the layer the units should come from:",
+            names, 0, False,
+        )
+        if not ok:
+            return False
+        for layer in choices:
+            if layer.name() == name:
+                self.set_source_layer(layer)
+                return True
+        return False
 
     def _selected_candidate(self):
         rows = self.table.selectionModel().selectedRows()

@@ -26,7 +26,7 @@ about=The TKAP QGIS tools. Three tools live under the TKAP Tools
     uncross itself before the polygon is built.
     .
     Licensed GPL-2.0-or-later. See LICENSE in the plugin folder.
-version=1.2.0
+version=1.2.1
 author=Türkmen-Karahöyük Archaeological Project (TKAP)
 email=andymcgallian@gmail.com
 
@@ -41,7 +41,25 @@ experimental=False
 deprecated=False
 hasProcessingProvider=no
 
-changelog=1.2.0
+changelog=1.2.1
+    - Fix: reopening a saved section then pressing "Add unit..." failed with
+      "This session has no source SU layer to add from". A saved section carries
+      only its drawing, and nothing recorded which SU layer it was drawn from,
+      so after a QGIS restart there was nothing to add units from and no way to
+      say what it should be.
+    - Saved sections now record their SU layer, and reopening looks it up again
+      by id, then by data source, then by name - so a rebuilt project, a
+      renamed layer or moved data still finds it. Sections saved before this
+      release have nothing recorded, and are handled the same way as a layer
+      that cannot be found.
+    - Section Drawing: a "Data sources" section in the panel shows which SU
+      layer the section reads from and lets it be changed at any time, which
+      also repoints the symbology and the export. "Add unit..." now offers to
+      pick a layer instead of refusing.
+    - Section Drawing: the "Section frame" panel section is collapsible and
+      starts collapsed, giving the height back to the SU roster. Both panel
+      sections remember whether you left them open.
+    1.2.0
     - Section Drawing: the section frame can be resized while you draw. Press
       "Resize on canvas" in the panel and drag its corners or edges, or type
       exact chainage and elevation limits. The frame is what the exported figure

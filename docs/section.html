@@ -119,6 +119,7 @@
   <h2>Saving and reopening</h2>
   <p><strong>Save</strong> in the panel writes the section to a GeoPackage. <strong>Plugins → TKAP Tools → Open a saved section…</strong> reads one back and carries on editing.</p>
   <p>The rectified photo is referenced, not stored, so a moved or offline share costs you the backdrop but not the drawing. If the photo isn't where it was, the section opens without it and says so.</p>
+  <p>The SU layer is referenced the same way. A saved section records which layer it was drawn from and looks it up on reopen — by id, then by data source, then by name — so a rebuilt project or a renamed layer still finds it. When it can't, the section still opens with everything you drew, and <strong>Data sources</strong> in the panel lets you point it at the right layer. That also repoints the symbology and the export, and it can be changed at any time, not just on reopen.</p>
 
   <h2>Notes</h2>
   <ul>
