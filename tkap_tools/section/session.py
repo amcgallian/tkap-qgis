@@ -1010,6 +1010,17 @@ class SectionSession:
         self.candidates = [c for c in self.candidates if c.su_id != su_id]
         return gone
 
+    def has_polygon_for(self, su_id: int) -> bool:
+        """Whether this unit has anything drawn for it yet.
+
+        A unit can sit in the roster with no polygon -- it was removed, or its
+        seed failed -- and the panel greys those rows and the export skips
+        them, so this is asked once per row on every refresh.
+        """
+        if self.polygon_layer is None:
+            return False
+        return any(f["su_id"] == su_id for f in self.polygon_layer.getFeatures())
+
     # ------------------------------------------------------------------ view --
 
     def section_rectangle(self, pad: float = 0.25) -> QgsRectangle:

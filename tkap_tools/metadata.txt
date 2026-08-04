@@ -42,6 +42,12 @@ deprecated=False
 hasProcessingProvider=no
 
 changelog=1.4.3
+    - Fix: opening a section failed outright with "'SectionSession' object has
+      no attribute 'has_polygon_for'". Any section holding at least one unit
+      hit it, so 1.4.2 could not open a section at all. Removing the
+      frame-resize resync in 1.4.2 took that method with it, but the panel
+      called it too - once per row, to grey out the units with nothing drawn
+      yet - and only the callers inside the session were checked.
     - Section Drawing: sections are drawn in ellipsoidal heights by default,
       and "Heights on the drawing" switches back to orthometric. Ellipsoidal is
       what the receiver actually measures; an orthometric height is only as

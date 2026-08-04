@@ -1,6 +1,6 @@
 <?xml version='1.0' encoding='utf-8'?>
 <plugins>
-  <pyqgis_plugin name="TKAP Tools" version="1.4.2">
+  <pyqgis_plugin name="TKAP Tools" version="1.4.3">
     <description>Field tools for the Türkmen-Karahöyük Archaeological Project: stratigraphic phasing, section drawing, and GNSS survey point conversion.</description>
     <about>The TKAP QGIS tools. Three tools live under the TKAP Tools menu:
 
@@ -11,10 +11,10 @@ Section Drawing: draw a section trace in plan view, pick the SUs that cross it, 
 Survey Points to Polygons: reads Emlid GNSS point exports and connects each outline's points in increment order into a closed polygon. Handles both SU_ points and F_ feature points in one pass, each against its own target layer, either replacing geometry on the existing layers or building onto new temporary ones. An outline shot out of perimeter order is reordered to uncross itself before the polygon is built.
 
 Licensed GPL-2.0-or-later. See LICENSE in the plugin folder.</about>
-    <version>1.4.2</version>
+    <version>1.4.3</version>
     <qgis_minimum_version>3.34</qgis_minimum_version>
     <homepage>https://github.com/amcgallian/tkap-qgis</homepage>
-    <author_name>Türkmen-Karahöyük Archaeological Project (TKAP)</author_name>
+    <author_name>Andrew McGallian</author_name>
     <author_email>andymcgallian@gmail.com</author_email>
     <tracker>https://github.com/amcgallian/tkap-qgis/issues</tracker>
     <repository>https://github.com/amcgallian/tkap-qgis</repository>
@@ -22,9 +22,9 @@ Licensed GPL-2.0-or-later. See LICENSE in the plugin folder.</about>
     <experimental>False</experimental>
     <deprecated>False</deprecated>
     <file_name>tkap_tools.zip</file_name>
-    <download_url>https://github.com/amcgallian/tkap-qgis/releases/download/v1.4.2/tkap_tools.zip</download_url>
-    <uploaded_by>Türkmen-Karahöyük Archaeological Project (TKAP)</uploaded_by>
-    <create_date>2026-08-04T09:21:52.467519</create_date>
-    <update_date>2026-08-04T09:21:52.467519</update_date>
+    <download_url>https://github.com/amcgallian/tkap-qgis/releases/download/v1.4.3/tkap_tools.zip</download_url>
+    <uploaded_by>Andrew McGallian</uploaded_by>
+    <create_date>2026-08-04T10:48:44.661986</create_date>
+    <update_date>2026-08-04T10:48:44.661986</update_date>
   </pyqgis_plugin>
 </plugins>
