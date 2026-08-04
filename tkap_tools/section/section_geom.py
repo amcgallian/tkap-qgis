@@ -26,6 +26,11 @@ from typing import Iterable, Sequence
 Coord2 = tuple[float, float]
 Coord3 = tuple[float, float, float]
 
+#: Smallest frame either axis may be cropped to, in metres. Small enough never
+#: to obstruct a real section, large enough that a mis-drag cannot collapse the
+#: drawing surface to nothing and take the export's scale with it.
+MIN_SECTION_SPAN = 0.05
+
 
 @dataclass
 class SectionLine:
@@ -170,9 +175,33 @@ class SectionLine:
         Only ever grows: calling it for the photo, then the control points, then
         the SUs leaves a box that holds all three. Never shrinks below the trace
         itself, so the section always covers what the user drew.
+
+        This is the *setup* path, where each source in turn says "I need at least
+        this much". Cropping the frame afterwards goes through
+        :meth:`set_chainage_extent`, which is allowed to take room away.
         """
         lo = min(self.x_min, x_min - pad, 0.0)
         hi = max(self.x_max, x_max + pad, self._length)
+        self.x_min_override = lo
+        self.x_max_override = hi
+
+    def set_chainage_extent(self, x_min: float, x_max: float) -> None:
+        """Set the drawing surface's chainage span outright, shrinking if asked.
+
+        Unlike :meth:`extend_to` this does not clamp to the trace, because
+        cropping in past the ends of the trace is the point: an ortho routinely
+        covers more wall than the section being drawn, and trimming the frame is
+        how you exclude it without going back to cut the raster.
+
+        Chainage 0 still means the start of the trace, so a cropped frame keeps
+        reporting real chainage rather than renumbering from its own left edge.
+        """
+        lo, hi = float(min(x_min, x_max)), float(max(x_min, x_max))
+        if hi - lo < MIN_SECTION_SPAN:
+            raise ValueError(
+                f"A section frame must be at least {MIN_SECTION_SPAN} m wide "
+                f"(got {hi - lo:.3f} m)"
+            )
         self.x_min_override = lo
         self.x_max_override = hi
 
@@ -194,10 +223,30 @@ class SectionLine:
                 self.x_max + pad, self.z_max + pad)
 
     def set_vertical_extent(self, z_min: float, z_max: float) -> None:
-        if z_max <= z_min:
-            raise ValueError(f"z_max ({z_max}) must exceed z_min ({z_min})")
+        if z_max - z_min < MIN_SECTION_SPAN:
+            raise ValueError(
+                f"A section frame must be at least {MIN_SECTION_SPAN} m tall "
+                f"(got z_min={z_min}, z_max={z_max})"
+            )
         self.z_min = float(z_min)
         self.z_max = float(z_max)
+
+    def set_section_extent(self, x_min: float, z_min: float,
+                           x_max: float, z_max: float) -> None:
+        """Set both axes of the drawing surface at once.
+
+        Validated as a pair before either is written, so a rejected drag leaves
+        the frame exactly as it was rather than half-applied.
+        """
+        lo_x, hi_x = float(min(x_min, x_max)), float(max(x_min, x_max))
+        lo_z, hi_z = float(min(z_min, z_max)), float(max(z_min, z_max))
+        if hi_x - lo_x < MIN_SECTION_SPAN or hi_z - lo_z < MIN_SECTION_SPAN:
+            raise ValueError(
+                f"A section frame must be at least {MIN_SECTION_SPAN} m on each "
+                f"side (got {hi_x - lo_x:.3f} x {hi_z - lo_z:.3f} m)"
+            )
+        self.x_min_override, self.x_max_override = lo_x, hi_x
+        self.z_min, self.z_max = lo_z, hi_z
 
 
 # --------------------------------------------------------------------- CRS --

@@ -450,8 +450,11 @@ class SectionSession:
         vertical extent, whether that came from a placed photo or was typed in
         by hand.
 
-        Read-only, so it cannot be dragged by accident, but still snappable, so
-        units can be run hard against the edge of the section.
+        Read-only, so it cannot be dragged by accident with the vertex tool.
+        Resizing goes through the frame tool instead (see
+        :meth:`set_frame`), which keeps it a rectangle and keeps the line, the
+        layer and the export in step. It stays snappable either way, so units
+        can be run hard against the edge of the section.
         """
         layer = QgsVectorLayer(
             f"Polygon?crs={self.crs.toWkt()}&field=label:string(64)",
@@ -460,19 +463,8 @@ class SectionSession:
         if not layer.isValid():
             raise RuntimeError("Could not create the section frame layer")
 
-        xmin, ymin, xmax, ymax = self.line.section_extent()
         feat = QgsFeature(layer.fields())
-        feat.setGeometry(QgsGeometry.fromPolygonXY([[
-            QgsPointXY(xmin, ymin), QgsPointXY(xmax, ymin),
-            QgsPointXY(xmax, ymax), QgsPointXY(xmin, ymax),
-            QgsPointXY(xmin, ymin),
-        ]]))
-        feat["label"] = (
-            f"{self.line.length:.2f} m x {ymax - ymin:.2f} m  "
-            f"({ymin:.2f}-{ymax:.2f} m)"
-        )
         layer.dataProvider().addFeatures([feat])
-        layer.updateExtents()
 
         layer.setRenderer(QgsSingleSymbolRenderer(QgsFillSymbol.createSimple({
             "color": "0,0,0,0",
@@ -487,6 +479,91 @@ class SectionSession:
         # Under the polygons, over the photo: a boundary you can see past.
         self._group().insertLayer(1, layer)
         self.frame_layer = layer
+        self._redraw_frame()
+
+    def _redraw_frame(self) -> None:
+        """Rewrite the frame feature from whatever the line currently says.
+
+        Kept apart from layer creation because the frame is now rewritten every
+        time it is dragged, and having one place that turns the line's extent
+        into geometry is what stops the box on screen drifting from the extent
+        the figure is exported at.
+        """
+        layer = self.frame_layer
+        if layer is None:
+            return
+        xmin, ymin, xmax, ymax = self.line.section_extent()
+        geom = QgsGeometry.fromPolygonXY([[
+            QgsPointXY(xmin, ymin), QgsPointXY(xmax, ymin),
+            QgsPointXY(xmax, ymax), QgsPointXY(xmin, ymax),
+            QgsPointXY(xmin, ymin),
+        ]])
+        label = (
+            f"{xmax - xmin:.2f} m x {ymax - ymin:.2f} m  "
+            f"({ymin:.2f}-{ymax:.2f} m)"
+        )
+        provider = layer.dataProvider()
+        fids = [f.id() for f in layer.getFeatures()]
+        label_idx = layer.fields().indexOf("label")
+        if fids:
+            provider.changeGeometryValues({fids[0]: geom})
+            if label_idx >= 0:
+                provider.changeAttributeValues({fids[0]: {label_idx: label}})
+        else:
+            feat = QgsFeature(layer.fields())
+            feat.setGeometry(geom)
+            feat["label"] = label
+            provider.addFeatures([feat])
+        layer.updateExtents()
+        layer.triggerRepaint()
+
+    # ----------------------------------------------------------------- frame --
+
+    def frame_rectangle(self) -> QgsRectangle:
+        """The drawing surface as it stands, which is what the figure exports."""
+        return self.section_rectangle(pad=0.0)
+
+    def set_frame(self, x_min: float, z_min: float,
+                  x_max: float, z_max: float) -> None:
+        """Crop or extend the drawing surface, and redraw the box.
+
+        The export reads its extent, scale and page size straight off the line,
+        so this is the whole of "the frame is what comes out": nothing else has
+        to be told. Raises ValueError if the box would be degenerate, leaving
+        the frame untouched.
+        """
+        self.line.set_section_extent(x_min, z_min, x_max, z_max)
+        self._redraw_frame()
+
+    def fit_frame_to_photo(self) -> bool:
+        """Snap the frame to the placed photo's own extent. False if no photo.
+
+        The usual reason to resize is that the ortho covers more wall than the
+        section, but the opposite happens too -- a photo that does not reach the
+        ends of the trace leaves blank canvas in the figure. Either way the
+        photo's extent is the sensible thing to snap to.
+        """
+        if self.photo_layer is None:
+            return False
+        extent = self.photo_layer.extent()
+        if extent.isEmpty():
+            return False
+        self.set_frame(
+            extent.xMinimum(), extent.yMinimum(),
+            extent.xMaximum(), extent.yMaximum(),
+        )
+        return True
+
+    def reset_frame(self) -> bool:
+        """Back to the full chainage of the drawn trace.
+
+        Chainage only. The elevation limits came from the photo placement or
+        were typed at setup, so there is no earlier vertical extent to restore
+        -- ``fit_frame_to_photo`` is the way back for those.
+        """
+        self.line.reset_extent()
+        self._redraw_frame()
+        return True
 
     def attach_photo(self, source_path: str, fit: Fit, *, workdir: Path | None = None) -> str:
         """Place the photo into section space and load it under the polygons."""

@@ -26,7 +26,7 @@ about=The TKAP QGIS tools. Three tools live under the TKAP Tools
     uncross itself before the polygon is built.
     .
     Licensed GPL-2.0-or-later. See LICENSE in the plugin folder.
-version=1.1.1
+version=1.2.0
 author=Türkmen-Karahöyük Archaeological Project (TKAP)
 email=andymcgallian@gmail.com
 
@@ -41,7 +41,20 @@ experimental=False
 deprecated=False
 hasProcessingProvider=no
 
-changelog=1.1.1
+changelog=1.2.0
+    - Section Drawing: the section frame can be resized while you draw. Press
+      "Resize on canvas" in the panel and drag its corners or edges, or type
+      exact chainage and elevation limits. The frame is what the exported figure
+      covers, so cropping it crops the drawing - which means an ortho that
+      covers more wall than the section no longer has to be cut down first.
+      "Fit to photo" and "Reset to trace" are there for the common cases, and a
+      cropped frame is kept when the section is saved and reopened.
+    - Section Drawing: the control-point photo is now sharp when you zoom in.
+      The full-resolution pixels for whatever you are looking at are read on
+      demand and drawn over the overview, so a nailhead resolves instead of
+      dissolving into the downsampled preview it used to be clicked on. Memory
+      does not grow with the size of the ortho.
+    1.1.1
     - Fix: the Survey Points to Polygons window opened taller than the screen
       once both point types had a target row, putting Run and Close off the
       bottom with no way to reach them. The settings now sit in a scrolling

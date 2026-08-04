@@ -295,7 +295,11 @@ def line_from_metadata(meta: dict) -> SectionLine:
     line.set_vertical_extent(float(meta["z_min"]), float(meta["z_max"]))
     x_min, x_max = meta.get("x_min"), meta.get("x_max")
     if x_min is not None and x_max is not None:
-        line.extend_to(float(x_min), float(x_max))
+        # set_chainage_extent, not extend_to: the saved span is the frame as it
+        # was last left, including cropped in past the ends of the trace.
+        # extend_to would quietly widen it back out to the full trace and the
+        # section would reopen bigger than it was saved.
+        line.set_chainage_extent(float(x_min), float(x_max))
     return line
 
 

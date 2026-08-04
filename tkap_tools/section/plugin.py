@@ -198,6 +198,15 @@ class TkapSectionPlugin:
                 # Removing the dock must not re-trigger its "are you done?"
                 # prompt: this teardown is already the answer.
                 self.panel._finishing = True
+                # Independently guarded, and before the dock goes: the frame
+                # tool owns rubber bands on the canvas and holds the session.
+                # Reaching here without the panel's own Finish path is normal
+                # (unload, or reopening a section over this one), and a tool
+                # left behind would draw handles over the restored project.
+                try:
+                    self.panel.release_frame_tool()
+                except Exception:
+                    pass
                 self.iface.removeDockWidget(self.panel)
                 self.panel.deleteLater()
             except Exception:

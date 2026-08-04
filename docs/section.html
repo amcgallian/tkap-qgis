@@ -99,6 +99,13 @@
     </section>
 
     <section class="step">
+      <h3>Crop the frame to what you want in the figure</h3>
+      <p>The dashed cyan box is the section frame, and it is exactly what the exported figure covers. Press <strong>Resize on canvas</strong> in the panel and drag its corners or edges; the drawing follows. Escape, or the button again, gives the normal tools back.</p>
+      <p>This is the way to deal with an ortho that covers more wall than the section. Rather than cropping the raster and re-rectifying, pull the frame in to the part you want and export. The scale, page size and elevation axis all recompute from the cropped frame.</p>
+      <p>The four boxes under it take exact chainage and elevation limits if you need the section to end at a stated value. <strong>Fit to photo</strong> snaps the frame to the placed photo, and <strong>Reset to trace</strong> puts it back to the full trace you drew. A cropped frame is kept when you save and reopen.</p>
+    </section>
+
+    <section class="step">
       <h3>Export</h3>
       <p>From the panel, export the clean drawing, the wireframe over the photo, or both. PNG, PDF and SVG.</p>
     </section>
@@ -118,6 +125,7 @@
     <li>The section CRS is a transverse mercator with <code>lat_0 = lon_0 = 0</code> and unit scale. The trace parameters are written into the CRS <code>REMARK</code>, so any layer or raster carrying it can be tied back to EPSG:32636.</li>
     <li>The fit reports when a placement comes out mirrored, with the right of the photo landing on the left of the drawing, and offers a one-click flip.</li>
     <li>One survey file can cover several walls. Points are selected by perpendicular distance to the trace, and the dialog says how many were left out.</li>
+    <li>When picking control points, zoom in as far as you like: the full-resolution pixels for the region in view are read on demand and drawn over the fast overview, so a nailhead resolves into real pixels instead of the downsampled blur it used to be. Only the region you are looking at is held at full resolution, so this does not get slower on a larger ortho.</li>
   </ul>
 </main>
 

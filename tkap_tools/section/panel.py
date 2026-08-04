@@ -61,6 +61,14 @@ class SectionPanel(QDockWidget):
         #: Set once the section is on its way out, so the close handler does not
         #: prompt again when the plugin removes the dock during teardown.
         self._finishing = False
+        #: The frame-resize map tool, built the first time it is asked for.
+        self._frame_tool = None
+        #: What was on the canvas before the resize tool took it, so Escape
+        #: hands digitising back rather than leaving the canvas toolless.
+        self._saved_map_tool = None
+        #: Guards the frame spin boxes against re-entering their own handler
+        #: while they are being filled in from the session.
+        self._frame_updating = False
         self.setObjectName("TkapSectionPanel")
         self.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
 
@@ -127,6 +135,7 @@ class SectionPanel(QDockWidget):
             row.addWidget(b)
         layout.addLayout(row)
 
+        layout.addWidget(self._build_frame_box())
         layout.addWidget(self._build_output_box())
 
         save = QPushButton("Save section...")
@@ -140,6 +149,174 @@ class SectionPanel(QDockWidget):
         layout.addWidget(finish)
 
         self.setWidget(root)
+
+    def _build_frame_box(self) -> QWidget:
+        """The drawing surface's extent, which is exactly what gets exported.
+
+        Two ways in, because they suit different moments. Dragging the handles
+        is how you crop against what you can see -- the usual case, where an
+        ortho covers more wall than this section. The numbers are for when the
+        section has to end at a stated chainage or elevation.
+        """
+        box = QGroupBox("Section frame")
+        layout = QVBoxLayout(box)
+
+        form = QFormLayout()
+        self.frame_spins = {}
+        for key, label, decimals, step in (
+            ("x_min", "Chainage from", 3, 0.1),
+            ("x_max", "Chainage to", 3, 0.1),
+            ("z_min", "Elevation base", 3, 0.1),
+            ("z_max", "Elevation top", 3, 0.1),
+        ):
+            spin = QDoubleSpinBox()
+            spin.setDecimals(decimals)
+            spin.setSingleStep(step)
+            # Wide enough for an absolute elevation and for chainage cropped
+            # past either end of the trace, which is allowed and is the point.
+            spin.setRange(-10000.0, 10000.0)
+            spin.setSuffix(" m")
+            spin.setKeyboardTracking(False)     # fire once, not per keystroke
+            spin.valueChanged.connect(self._on_frame_typed)
+            self.frame_spins[key] = spin
+            form.addRow(label, spin)
+        layout.addLayout(form)
+
+        self.resize_btn = QPushButton("Resize on canvas")
+        self.resize_btn.setCheckable(True)
+        self.resize_btn.setToolTip(
+            "Drag the frame's corners and edges on the map. Press Escape or "
+            "click again to go back to the normal tools."
+        )
+        self.resize_btn.toggled.connect(self._on_resize_toggled)
+        layout.addWidget(self.resize_btn)
+
+        btns = QHBoxLayout()
+        for label, tip, slot in (
+            ("Fit to photo", "Snap the frame to the placed photo's extent.",
+             self._fit_frame_to_photo),
+            # Named for what it does, not for what "reset" might suggest:
+            # there is no earlier vertical extent to go back to, since the
+            # elevations came from the photo placement or were typed in.
+            ("Reset chainage",
+             "Back to the full chainage of the trace you drew. The elevation "
+             "limits are left as they are - use Fit to photo for those.",
+             self._reset_frame),
+        ):
+            b = QPushButton(label)
+            b.setToolTip(tip)
+            b.clicked.connect(slot)
+            btns.addWidget(b)
+        layout.addLayout(btns)
+
+        hint = QLabel(
+            "The frame is what the exported drawing covers, so cropping it "
+            "here crops the figure - no need to cut down the ortho."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: grey; font-size: 10px;")
+        layout.addWidget(hint)
+        return box
+
+    # ----------------------------------------------------------------- frame --
+
+    def refresh_frame(self) -> None:
+        """Put the line's current extent into the spin boxes."""
+        line = self.session.line
+        if line.z_min is None or line.z_max is None:
+            return
+        values = {
+            "x_min": line.x_min, "x_max": line.x_max,
+            "z_min": line.z_min, "z_max": line.z_max,
+        }
+        self._frame_updating = True
+        try:
+            for key, spin in self.frame_spins.items():
+                spin.setValue(values[key])
+        finally:
+            self._frame_updating = False
+
+    def _on_frame_typed(self) -> None:
+        """Apply typed extents, silently ignoring the ones that make no box."""
+        if getattr(self, "_frame_updating", False):
+            return
+        try:
+            self.session.set_frame(
+                self.frame_spins["x_min"].value(),
+                self.frame_spins["z_min"].value(),
+                self.frame_spins["x_max"].value(),
+                self.frame_spins["z_max"].value(),
+            )
+        except ValueError:
+            # Half-typed values pass through here constantly (a "to" below a
+            # "from" while the second number is still being entered), so this is
+            # not worth a dialog. The frame simply does not move until the pair
+            # makes a box.
+            return
+        if self._frame_tool is not None:
+            self._frame_tool.sync_from_session()
+        self.iface.mapCanvas().refresh()
+
+    def _on_resize_toggled(self, on: bool) -> None:
+        canvas = self.iface.mapCanvas()
+        if not on:
+            if self._frame_tool is not None and canvas.mapTool() is self._frame_tool:
+                canvas.unsetMapTool(self._frame_tool)
+            return
+
+        from .frame_tool import FrameResizeTool
+
+        if self._frame_tool is None:
+            self._frame_tool = FrameResizeTool(canvas, self.session)
+            self._frame_tool.frameChanged.connect(self._on_frame_dragged)
+            # QgsMapTool's own signal, so the button also unticks when QGIS
+            # switches tools on its own -- picking the vertex tool, say.
+            self._frame_tool.deactivated.connect(self._on_tool_deactivated)
+        self._saved_map_tool = canvas.mapTool()
+        canvas.setMapTool(self._frame_tool)
+
+    def _on_tool_deactivated(self) -> None:
+        if self.resize_btn.isChecked():
+            self.resize_btn.setChecked(False)
+        # Hand the canvas back to whatever was in use, so Escape returns to
+        # digitising rather than to no tool at all.
+        if self._saved_map_tool is not None:
+            canvas = self.iface.mapCanvas()
+            if canvas.mapTool() is None:
+                canvas.setMapTool(self._saved_map_tool)
+            self._saved_map_tool = None
+
+    def _on_frame_dragged(self, x_min, z_min, x_max, z_max) -> None:
+        self.refresh_frame()
+
+    def _fit_frame_to_photo(self) -> None:
+        if not self.session.fit_frame_to_photo():
+            QMessageBox.information(
+                self, "No photo",
+                "This section has no placed photo to fit the frame to.",
+            )
+            return
+        self._after_frame_change()
+
+    def _reset_frame(self) -> None:
+        self.session.reset_frame()
+        self._after_frame_change()
+
+    def _after_frame_change(self) -> None:
+        self.refresh_frame()
+        if self._frame_tool is not None:
+            self._frame_tool.sync_from_session()
+        self.iface.mapCanvas().refresh()
+
+    def release_frame_tool(self) -> None:
+        """Give the canvas back and drop the tool. Called as the section ends."""
+        if self._frame_tool is None:
+            return
+        canvas = self.iface.mapCanvas()
+        if canvas.mapTool() is self._frame_tool:
+            canvas.unsetMapTool(self._frame_tool)
+        self._frame_tool.cleanup()
+        self._frame_tool = None
 
     def _build_output_box(self) -> QWidget:
         box = QGroupBox("Export")
@@ -187,6 +364,7 @@ class SectionPanel(QDockWidget):
         for row, cand in enumerate(cands):
             self._fill_row(row, cand)
         self.table.blockSignals(False)
+        self.refresh_frame()
 
     def _fill_row(self, row: int, cand) -> None:
         present = self.session.has_polygon_for(cand.su_id)
@@ -465,6 +643,10 @@ class SectionPanel(QDockWidget):
                 if answer == QMessageBox.Yes:
                     layer.commitChanges()
         self._finishing = True
+        # Before anything else tears down: the tool holds rubber bands on the
+        # canvas and a reference to the session, neither of which should outlive
+        # the section.
+        self.release_frame_tool()
         if save:
             self.saveRequested.emit()
         self.finished.emit()
