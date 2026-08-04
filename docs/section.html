@@ -70,7 +70,9 @@
     <section class="step">
       <h3>Check the datum before you trust an elevation</h3>
       <p>The control points and the database aren't necessarily on the same vertical datum. A file recorded on the receiver's "Global CS" has an empty <code>Elevation</code> column and only ellipsoidal height filled, at values around 1066 m, while <code>altitude_min</code>/<code>altitude_max</code> for the same wall read about 1030 m. The difference is the geoid separation, roughly 35.9 m at this site.</p>
-      <p>Get it wrong and the photo sits 36 m above the SUs. So the tool states which datum it found, exposes the separation as an explicit number, and offers <strong>Calibrate from a known elevation</strong>, where you enter the orthometric elevation of the top of the wall and it solves for the separation.</p>
+      <p><strong>Heights on the drawing</strong> decides which of the two the section is drawn in. It defaults to ellipsoidal, because that is the height the receiver actually measures: an orthometric height is only as good as the geoid model behind it, and a receiver carrying the wrong model hands over a plausible-looking height that is quietly wrong. Switch it to orthometric when you want the figure labelled with the same numbers as the SU table.</p>
+      <p>Whichever you choose, everything is converted onto it — the control points, and the recorded SU altitudes the seed boxes come from — so the photo and the boxes always agree. <strong>Gap between the two</strong> is the separation that conversion uses, and <strong>Work it out from a known height</strong> solves for it: enter the orthometric elevation of the top of the wall and it compares that against the highest control point.</p>
+      <p>Get it wrong and the photo sits 36 m above the SUs, so the pre-flight checklist states which datum the heights ended up on, and objects when heights arrive on the other one with the gap left at 0.</p>
       <div class="note">
         <p>PROJ won't do this for you here: no geoid grid is installed, and a vertical transform to EGM2008 returns the height unchanged rather than failing.</p>
       </div>

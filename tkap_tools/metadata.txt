@@ -26,8 +26,8 @@ about=The TKAP QGIS tools. Three tools live under the TKAP Tools
     uncross itself before the polygon is built.
     .
     Licensed GPL-2.0-or-later. See LICENSE in the plugin folder.
-version=1.4.2
-author=Türkmen-Karahöyük Archaeological Project (TKAP)
+version=1.4.3
+author=Andrew McGallian
 email=andymcgallian@gmail.com
 
 homepage=https://github.com/amcgallian/tkap-qgis
@@ -41,7 +41,25 @@ experimental=False
 deprecated=False
 hasProcessingProvider=no
 
-changelog=1.4.2
+changelog=1.4.3
+    - Section Drawing: sections are drawn in ellipsoidal heights by default,
+      and "Heights on the drawing" switches back to orthometric. Ellipsoidal is
+      what the receiver actually measures; an orthometric height is only as
+      good as the geoid model that produced it, and a receiver carrying the
+      wrong model hands over a plausible-looking height that is quietly wrong.
+      Whichever is chosen, control points and recorded unit altitudes are both
+      converted onto it, so the photo and the seed boxes always agree.
+    - Section Drawing: the height correction is now the gap between the two
+      datums rather than something taken off every control point, and it is
+      applied only to heights arriving on the other datum. A section records
+      which datum it was drawn in, states it in the section CRS, and reopens on
+      it; sections saved before this release reopen as orthometric, which is
+      what they were.
+    - Section Drawing: the pre-flight checklist says which datum the heights
+      are on, and objects when control points sit on the datum the drawing is
+      not using with no gap set to carry them across - the one case where
+      everything still fits and the elevation axis is silently 36 m out.
+    1.4.2
     - Section Drawing: resizing the frame no longer re-decides which units the
       section holds. Cropping the frame is a framing decision, and having rows
       appear and disappear in the middle of it was more annoying than useful.

@@ -60,6 +60,12 @@ class SectionLine:
     # entered by hand; None means "not yet known".
     z_min: float | None = None
     z_max: float | None = None
+    #: Which vertical datum the y axis is in. Held as a plain string -- the
+    #: value of a :class:`~.photo.HeightDatum` -- because photo.py imports this
+    #: module, so this module cannot import the enum back without a cycle. It
+    #: is a label on the axis, not a conversion: whatever is drawn here has
+    #: already been brought onto this datum.
+    height_datum: str = "ellipsoidal"
 
     _ux: float = field(init=False, repr=False)
     _uy: float = field(init=False, repr=False)
@@ -321,7 +327,7 @@ def section_crs_remark(line: SectionLine) -> str:
         f"TKAP section '{line.name}'; "
         f"x=chainage from ({line.p0[0]:.3f},{line.p0[1]:.3f}) "
         f"to ({line.p1[0]:.3f},{line.p1[1]:.3f}) in EPSG:32636; "
-        f"y=elevation (m, orthometric); azimuth={line.azimuth:.2f}; "
+        f"y=elevation (m, {line.height_datum}); azimuth={line.azimuth:.2f}; "
         f"length={line.length:.3f}; flipped={int(line.flipped)}"
     )
 

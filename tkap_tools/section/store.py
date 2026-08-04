@@ -156,6 +156,10 @@ def save_session(session, path: str | Path, *, title: str = "") -> Path:
     feat["style_qml"] = session.style_qml or ""
     source = getattr(session, "source_layer", None)
     feat["extra_json"] = json.dumps({
+        # Which vertical datum the drawing's heights are on. A label rather than
+        # a conversion -- the geometry is already on it -- but reopening without
+        # it would state the wrong datum in the section CRS.
+        "height_datum": line.height_datum,
         # Which SU layer this was drawn from. Recorded so reopening can find it
         # again: without it a reopened section had no source layer at all, and
         # "Add unit..." dead-ended on "this session has no source SU layer".
@@ -353,6 +357,11 @@ def line_from_metadata(meta: dict) -> SectionLine:
         name=meta.get("name") or "Section",
         buffer=float(meta.get("buffer") or 0.25),
         flipped=bool(meta.get("flipped")),
+    )
+    # Sections saved before the datum was a choice were all drawn on the
+    # database's orthometric altitudes, so that is what nothing recorded means.
+    line.height_datum = (
+        (meta.get("extra") or {}).get("height_datum") or "orthometric"
     )
     line.set_vertical_extent(float(meta["z_min"]), float(meta["z_max"]))
     x_min, x_max = meta.get("x_min"), meta.get("x_max")

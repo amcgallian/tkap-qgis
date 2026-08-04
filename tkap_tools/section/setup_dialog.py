@@ -8,8 +8,8 @@ SU polygons to edit.
 The dialog is deliberately opinionated about the two mistakes that produce a
 plausible-looking but wrong drawing:
 
-* using ellipsoidal heights where the SU table holds orthometric ones, a 36 m
-  error at this site, so the datum is stated in words and the offset is explicit
+* mixing the two vertical datums, a 36 m error at this site, so which one the
+  drawing works in is chosen in words and the offset between them is explicit
 * fitting a projective transform to exactly four points, which reports zero
   residual while being wrong everywhere between them, so the model is chosen
   from the point count and residuals are always on screen
@@ -59,11 +59,13 @@ from qgis.PyQt.QtWidgets import (
 from .gcp_view import PhotoView, PlacedPreview
 from .photo import (
     DEFAULT_GEOID_SEPARATION,
+    DEFAULT_WORKING_DATUM,
     ControlPoint,
     Fit,
     FitModel,
     HeightDatum,
     best_model_for,
+    calibrate_separation,
     fit_transform,
     load_emlid_csv,
     select_for_section,
@@ -130,8 +132,15 @@ class SectionSetupDialog(QDialog):
         self.photo_path: str | None = None
         self._image_size = (0, 0)
         self._picking_row: int | None = None
+        #: What the last control-point file had to say about itself, kept so the
+        #: note under the datum controls can be rebuilt when the datum or the
+        #: correction changes rather than only when a file is loaded.
+        self._gcp_notes = ""
+        self._floors_key: tuple | None = None
+        self._floors: dict[int, float] = {}
 
         self._build_ui()
+        self.line.height_datum = self._working_datum().value
         self._refresh_trace_labels()
         self._on_style_source_changed()
         # There is no photo yet when the dialog opens, so the "take it from the
@@ -402,27 +411,57 @@ class SectionSetupDialog(QDialog):
         rlayout.addWidget(self.datum_label)
 
         datum_form = QFormLayout()
+
+        # Which datum the finished drawing is on. Ellipsoidal by default: it is
+        # what the receiver measures, where an orthometric height is only as
+        # good as the geoid model behind it.
+        self.datum_combo = QComboBox()
+        for option in (HeightDatum.ELLIPSOIDAL, HeightDatum.ORTHOMETRIC):
+            self.datum_combo.addItem(option.label, option)
+        # Signals blocked for the opening selection: the handler reaches into
+        # the units tab, which is built after this one. Harmless while the
+        # default sits at index 0 and the combo is already there, but changing
+        # the default would otherwise fire it mid-build.
+        self.datum_combo.blockSignals(True)
+        self.datum_combo.setCurrentIndex(
+            self.datum_combo.findData(DEFAULT_WORKING_DATUM)
+        )
+        self.datum_combo.blockSignals(False)
+        self.datum_combo.setToolTip(
+            "Which heights the elevation axis is labelled with, and what every "
+            "control point and recorded unit altitude is converted to.\n\n"
+            "Ellipsoidal is the raw GNSS height and depends on no geoid model. "
+            "Orthometric matches the altitudes in the SU table.\n\n"
+            "Either way the drawing is internally consistent; the choice is "
+            "which numbers end up down the side of the figure."
+        )
+        self.datum_combo.currentIndexChanged.connect(self._on_datum_changed)
+        datum_form.addRow("Heights on the drawing", self.datum_combo)
+
         self.separation_spin = QDoubleSpinBox()
         self.separation_spin.setRange(-200.0, 200.0)
         self.separation_spin.setDecimals(3)
         self.separation_spin.setSingleStep(0.1)
         self.separation_spin.setSuffix(" m")
-        # Default to no correction: most control points now come in already on
-        # the database's datum, so 0 is the right starting point. A file that is
-        # still on ellipsoidal heights gets a suggested value when it loads (see
+        # Default to no correction: it is only needed to cross between the two
+        # datums, and a file already on the drawing's datum crosses nothing. A
+        # file on the other one gets a suggested value when it loads (see
         # _browse_gcps), and "Work it out from a known height..." solves for it.
         self.separation_spin.setValue(0.0)
         self.separation_spin.setToolTip(
-            "Taken off every control point height. Leave at 0 when the heights "
-            "already match the database. Ellipsoidal (raw GNSS) heights at this "
-            "site read about 36 m high and need a correction."
+            "How far ellipsoidal heights sit above orthometric ones here: about "
+            "36 m at this site, 0 if you never cross between the two.\n\n"
+            "It is applied only to heights that arrive on the other datum from "
+            "the one above - control points from a differently configured "
+            "receiver, and the SU table's altitudes when the drawing works in "
+            "ellipsoidal heights."
         )
         self.separation_spin.valueChanged.connect(self._on_separation_changed)
-        datum_form.addRow("Height correction", self.separation_spin)
+        datum_form.addRow("Gap between the two", self.separation_spin)
 
         calibrate = QPushButton("Work it out from a known height...")
         calibrate.setToolTip(
-            "Enter the real height of the top of the wall and the correction "
+            "Enter the real height of the top of the wall and the gap "
             "is calculated for you."
         )
         calibrate.clicked.connect(self._calibrate_separation)
@@ -611,6 +650,7 @@ class SectionSetupDialog(QDialog):
         if not isinstance(layer, QgsVectorLayer) or not layer.isValid():
             self.candidates = []
             self._refresh_su_table()
+            self._refresh_datum_note()
             return
 
         restrict = None
@@ -623,27 +663,60 @@ class SectionSetupDialog(QDialog):
         except Exception as exc:
             QMessageBox.warning(self, "SU search failed", str(exc))
             self.candidates = []
+        # Rediscovery is the one moment worth asking the database again.
+        self._floors_key = None
 
         self._apply_seeding(layer)
         self._refresh_su_table()
+        # Whether the recorded altitudes are in use is one of the things the
+        # datum note complains about, and this is the path that changes it.
+        self._refresh_datum_note()
 
-    def _apply_seeding(self, layer) -> None:
-        if self.line.z_min is None or self.line.z_max is None:
-            self.line.set_vertical_extent(self.zmin_spin.value(), self.zmax_spin.value())
+    def _strat_floors(self, layer) -> dict[int, float]:
+        """Strat floors for the current candidates, fetched at most once.
+
+        A database round trip, and seeding is now re-run on every nudge of the
+        gap spinner, so the answer is held against the candidate set it was
+        fetched for rather than asked for again on each one. Cleared whenever
+        the candidates are rediscovered, so Refresh still goes back to the
+        database.
+        """
+        key = (layer.id(), tuple(c.su_id for c in self.candidates))
+        if self._floors_key == key:
+            return self._floors
         floors = {}
         if postgis_connection(layer) is not None and self.candidates:
             try:
                 floors = strat_floors(layer, [c.su_id for c in self.candidates])
             except Exception:
                 floors = {}
+        self._floors_key, self._floors = key, floors
+        return floors
+
+    def _apply_seeding(self, layer) -> None:
+        if self.line.z_min is None or self.line.z_max is None:
+            self.line.set_vertical_extent(self.zmin_spin.value(), self.zmax_spin.value())
         try:
             apply_seed_cascade(
                 self.candidates, self.line,
-                strat_floor=floors,
+                strat_floor=self._strat_floors(layer),
                 use_recorded_elevations=self.use_elevations.isChecked(),
+                height_offset=self._height_offset(),
             )
         except ValueError:
             pass
+
+    def _reseed(self) -> None:
+        """Re-run the seeding after something the seed boxes depend on moved.
+
+        Cheap and idempotent -- ``recorded_*`` is never written by seeding -- so
+        it can be called on every change to the datum or the gap between datums
+        without accumulating error.
+        """
+        layer = self.su_layer_combo.currentLayer()
+        if self.candidates and layer is not None:
+            self._apply_seeding(layer)
+            self._refresh_su_table()
 
     def _refresh_su_table(self) -> None:
         table = self.su_table
@@ -726,10 +799,6 @@ class SectionSetupDialog(QDialog):
 
         on, off = select_for_section(points, self.line)
         self.control_points = on
-        if points and points[0].datum is HeightDatum.ELLIPSOIDAL:
-            guess = suggest_separation(points)
-            if guess:
-                self.separation_spin.setValue(guess)
 
         message = " ".join(notes)
         if off:
@@ -738,10 +807,19 @@ class SectionSetupDialog(QDialog):
                 f"{self.line.buffer:.2f} m off this trace and were left out - "
                 "a day's survey usually covers several walls."
             )
-        self.datum_label.setText(message)
-        self.datum_label.setStyleSheet(
-            "color: #b06000;" if points and points[0].datum is HeightDatum.ELLIPSOIDAL else ""
-        )
+        # Recorded before the spin box is touched: setting it re-runs the note.
+        self._gcp_notes = message
+
+        # Only an ellipsoidal file can measure the gap between the datums, and
+        # the gap is worth having either way -- it carries the points across
+        # when the drawing is orthometric, and the SU altitudes across when it
+        # is ellipsoidal.
+        if points and points[0].datum is HeightDatum.ELLIPSOIDAL:
+            guess = suggest_separation(points)
+            if guess:
+                self.separation_spin.setValue(guess)
+
+        self._refresh_datum_note()
         self._refresh_gcp_table()
         self._update_ok_state()
 
@@ -750,6 +828,7 @@ class SectionSetupDialog(QDialog):
         table.blockSignals(True)
         table.setRowCount(len(self.control_points))
         sep = self.separation_spin.value()
+        datum = self._working_datum()
         for row, p in enumerate(self.control_points):
             check = QTableWidgetItem()
             check.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
@@ -757,7 +836,7 @@ class SectionSetupDialog(QDialog):
             check.setData(Qt.UserRole, row)
             table.setItem(row, 0, check)
             table.setItem(row, 1, QTableWidgetItem(p.name))
-            table.setItem(row, 2, QTableWidgetItem(f"{p.orthometric(sep):.3f}"))
+            table.setItem(row, 2, QTableWidgetItem(f"{p.height_in(datum, sep):.3f}"))
             off = p.offset_from(self.line)
             off_item = QTableWidgetItem(f"{off*100:+.1f} cm")
             if abs(off) > self.line.buffer * 0.75:
@@ -840,9 +919,92 @@ class SectionSetupDialog(QDialog):
                     p.name, p.pixel_x, p.pixel_y, highlight=(i == self._picking_row)
                 )
 
-    def _on_separation_changed(self, _value: float) -> None:
+    # ----------------------------------------------------------- the datum --
+
+    def _working_datum(self) -> HeightDatum:
+        """The datum the drawing is on: what everything is converted to."""
+        return self.datum_combo.currentData() or DEFAULT_WORKING_DATUM
+
+    def _height_offset(self) -> float:
+        """What to add to the SU table's altitudes to reach the drawing.
+
+        The table is orthometric, so it is already there when the drawing is
+        orthometric too, and needs the separation added when the drawing works
+        in ellipsoidal heights.
+        """
+        if self._working_datum() is HeightDatum.ELLIPSOIDAL:
+            return self.separation_spin.value()
+        return 0.0
+
+    def _on_datum_changed(self, _index: int) -> None:
+        # Recorded on the line, because the line is what carries the section's
+        # CRS -- whose remark states the datum -- and what gets saved.
+        self.line.height_datum = self._working_datum().value
+        self._refresh_datum_note()
         self._refresh_gcp_table()
+        self._reseed()
         self.recompute_fit()
+
+    def _on_separation_changed(self, _value: float) -> None:
+        self._refresh_datum_note()
+        self._refresh_gcp_table()
+        # The SU table's altitudes cross the gap too when the drawing is
+        # ellipsoidal, so the seed boxes move with it.
+        self._reseed()
+        self.recompute_fit()
+
+    def _datum_mismatch(self) -> str | None:
+        """Complaint about heights being used on a datum they are not on.
+
+        The silent 36 m errors the datum choice leaves open, both of the same
+        shape: heights arriving from the other datum with no gap set to carry
+        them across. Nothing moves, everything still fits, and the drawing is
+        out by the geoid. Two ways in -- the control points, and the SU table's
+        recorded altitudes -- so both are checked.
+        """
+        if self.separation_spin.value():
+            return None
+        working = self._working_datum()
+
+        if self.control_points:
+            theirs = self.control_points[0].datum
+            if theirs is not working:
+                return (
+                    f"These control points are {theirs.value} but the drawing "
+                    f"is working in {working.value} heights, and the gap "
+                    "between the two is 0 - so they will be used exactly as "
+                    f"they are and the elevation axis will be labelled "
+                    f"{working.value} when it is not. Set the gap, or switch "
+                    "the drawing to the datum the points are already on."
+                )
+
+        # The SU table is orthometric, so an ellipsoidal drawing needs the gap
+        # to reach it -- but only when those altitudes are actually being used.
+        # Unticked, every unit seeds as a full-height column off the section's
+        # own extent, which is already on the drawing's datum.
+        if (
+            working is HeightDatum.ELLIPSOIDAL
+            and self.use_elevations.isChecked()
+            and any(
+                c.include and (c.recorded_min is not None or c.recorded_max is not None)
+                for c in self.candidates
+            )
+        ):
+            return (
+                "Units are being seeded from their recorded altitudes, which "
+                "the database holds as orthometric, but the drawing is working "
+                "in ellipsoidal heights with the gap between the two set to 0 "
+                "- so those boxes will seed about 36 m below the photo. Set "
+                "the gap, or untick \"Start units at their recorded heights\"."
+            )
+        return None
+
+    def _refresh_datum_note(self) -> None:
+        """The line under the datum controls: what was read, and what is wrong."""
+        mismatch = self._datum_mismatch()
+        parts = [p for p in (self._gcp_notes, mismatch) if p]
+        self.datum_label.setText(" ".join(parts))
+        self.datum_label.setStyleSheet("color: #b06000;" if mismatch else "")
 
     def _calibrate_separation(self) -> None:
         """Derive the separation from a known orthometric elevation.
@@ -854,7 +1016,9 @@ class SectionSetupDialog(QDialog):
         if not self.control_points:
             QMessageBox.information(self, "No control points", "Load control points first.")
             return
-        tops = [c.alt_max for c in self.candidates if c.alt_max is not None]
+        # The recorded altitudes, which are what the answer is measured against,
+        # rather than the seed boxes -- those already carry the offset.
+        tops = [c.recorded_max for c in self.candidates if c.recorded_max is not None]
         suggestion = max(tops) if tops else 1031.0
 
         from qgis.PyQt.QtWidgets import QInputDialog
@@ -867,8 +1031,12 @@ class SectionSetupDialog(QDialog):
         )
         if not ok:
             return
-        highest = max(p.height for p in self.control_points)
-        self.separation_spin.setValue(highest - value)
+        try:
+            self.separation_spin.setValue(
+                calibrate_separation(self.control_points, value)
+            )
+        except ValueError as exc:
+            QMessageBox.information(self, "Nothing to work out", str(exc))
 
     def recompute_fit(self) -> None:
         picked = [p for p in self.control_points if p.enabled and p.is_picked]
@@ -900,6 +1068,7 @@ class SectionSetupDialog(QDialog):
                 separation=self.separation_spin.value(),
                 image_height=self._image_size[1],
                 model=model,
+                datum=self._working_datum(),
             )
         except Exception as exc:
             self.fit = None
@@ -1020,7 +1189,8 @@ class SectionSetupDialog(QDialog):
         picked = [p for p in self.control_points if p.enabled]
         if picked:
             sep = self.separation_spin.value()
-            xs = [p.section_xy(self.line, sep)[0] for p in picked]
+            datum = self._working_datum()
+            xs = [p.section_xy(self.line, sep, datum)[0] for p in picked]
             self.line.extend_to(min(xs), max(xs), pad=EXTENT_PAD)
 
         # The placed photo's own footprint.
@@ -1159,6 +1329,14 @@ class SectionSetupDialog(QDialog):
                 items.append((False,
                     "Control points are loaded but none were clicked on the "
                     "photo, so the photo cannot be placed."))
+
+        # Which datum every height on the drawing is on. Always stated, because
+        # it is what the numbers down the side of the finished figure mean.
+        mismatch = self._datum_mismatch()
+        if mismatch:
+            items.append((False, mismatch))
+        else:
+            items.append((True, f"Heights are {self._working_datum().label}."))
 
         has_warning = any(not ok for ok, _ in items)
         rows = "".join(

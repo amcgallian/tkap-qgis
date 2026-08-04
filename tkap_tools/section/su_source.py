@@ -511,6 +511,7 @@ def apply_seed_cascade(
     *,
     strat_floor: dict[int, float] | None = None,
     use_recorded_elevations: bool = False,
+    height_offset: float = 0.0,
     min_box_height: float = 0.05,
 ) -> None:
     """Set each candidate's vertical extent for seeding.
@@ -529,9 +530,16 @@ def apply_seed_cascade(
     2. one altitude -> box down to the strat floor, or to the section edge
     3. nothing -> full-height column
 
+    ``height_offset`` is added to every recorded altitude and every strat floor
+    before it is used. The database records orthometric heights; a section
+    working in ellipsoidal ones needs the geoid separation added to bring them
+    onto its axis, or the boxes seed 36 m below the photo. It is 0 when the
+    section works in the datum the database uses.
+
     Mutates the candidates in place. ``line`` must already have its vertical
     extent set. ``alt_min``/``alt_max`` end up holding the *seed box*, so the
-    values as recorded are kept in ``recorded_min``/``recorded_max`` for display.
+    values as recorded are kept in ``recorded_min``/``recorded_max`` for display
+    -- as recorded, meaning on the database's datum, offset or no offset.
     """
     if line.z_min is None or line.z_max is None:
         raise ValueError("Set the section's vertical extent before seeding")
@@ -551,6 +559,9 @@ def apply_seed_cascade(
             continue
 
         lo, hi = c.recorded_min, c.recorded_max
+        if height_offset:
+            lo = None if lo is None else lo + height_offset
+            hi = None if hi is None else hi + height_offset
 
         if lo is not None and hi is not None:
             if hi < lo:
@@ -558,6 +569,8 @@ def apply_seed_cascade(
             c.seed_source = SeedSource.MEASURED
         elif hi is not None:
             floor = floors.get(c.su_id)
+            if floor is not None:
+                floor += height_offset
             lo = floor if floor is not None and floor < hi else guess_lo
             c.seed_source = (
                 SeedSource.INFERRED if floor is not None and floor < hi
