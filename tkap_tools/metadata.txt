@@ -26,7 +26,7 @@ about=The TKAP QGIS tools. Three tools live under the TKAP Tools
     uncross itself before the polygon is built.
     .
     Licensed GPL-2.0-or-later. See LICENSE in the plugin folder.
-version=1.2.1
+version=1.3.0
 author=Türkmen-Karahöyük Archaeological Project (TKAP)
 email=andymcgallian@gmail.com
 
@@ -41,7 +41,25 @@ experimental=False
 deprecated=False
 hasProcessingProvider=no
 
-changelog=1.2.1
+changelog=1.3.0
+    - Fix: Section Drawing's "Remove" did not remove. It deleted the unit's
+      polygon straight through the data provider, underneath the edit session
+      the drawing layer is held in, so the layer went on showing it and undo
+      knew nothing about it - and it left the unit in the roster, looking like
+      it had failed to draw. Removing now goes through the edit session (so
+      Ctrl+Z works) and takes the unit out of the list as well.
+    - Section Drawing: resizing the frame now re-decides which units the
+      section holds. Units the frame takes in are seeded, and units it no
+      longer reaches are dropped - but only while they are still untouched
+      seeds. Anything drawn on or given a height is kept whatever the frame
+      does, and named in the message, because tidying a list is never worth
+      losing someone's tracing.
+    - Section Drawing: every part of the panel collapses now, not just the
+      frame, and each remembers whether you left it open.
+    - Section Drawing: "Re-seed" has a button. It was written and documented
+      but never wired to anything, so there was no way to put a fresh seed box
+      back after editing one.
+    1.2.1
     - Fix: reopening a saved section then pressing "Add unit..." failed with
       "This session has no source SU layer to add from". A saved section carries
       only its drawing, and nothing recorded which SU layer it was drawn from,

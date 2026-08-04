@@ -91,8 +91,8 @@
         <tr><td>Show</td><td>Hides a unit without removing it.</td></tr>
         <tr><td>Isolate</td><td>Shows only the selected unit.</td></tr>
         <tr><td>Add SU…</td><td>Brings in units that were missed, either by widening the search buffer or by picking a number from anywhere in the layer.</td></tr>
-        <tr><td>Remove</td><td>Takes a unit out.</td></tr>
-        <tr><td>Re-seed</td><td>Puts a fresh box back.</td></tr>
+        <tr><td>Re-seed</td><td>Replaces a unit's polygon with a fresh seed box.</td></tr>
+        <tr><td>Remove</td><td>Takes a unit out of the section entirely, polygon and row. <strong>Add unit…</strong> brings it back.</td></tr>
       </table>
       </div>
       <p>Unticking <strong>Show</strong> renders a unit with a transparent symbol rather than filtering it out, so it keeps snapping. You can hide a crowded neighbour and still snap a new boundary onto its edge. Hidden units still appear in the exported figures; use <strong>Remove</strong> to exclude something.</p>
@@ -102,7 +102,8 @@
       <h3>Crop the frame to what you want in the figure</h3>
       <p>The dashed cyan box is the section frame, and it is exactly what the exported figure covers. Press <strong>Resize on canvas</strong> in the panel and drag its corners or edges; the drawing follows. Escape, or the button again, gives the normal tools back.</p>
       <p>This is the way to deal with an ortho that covers more wall than the section. Rather than cropping the raster and re-rectifying, pull the frame in to the part you want and export. The scale, page size and elevation axis all recompute from the cropped frame.</p>
-      <p>The four boxes under it take exact chainage and elevation limits if you need the section to end at a stated value. <strong>Fit to photo</strong> snaps the frame to the placed photo, and <strong>Reset to trace</strong> puts it back to the full trace you drew. A cropped frame is kept when you save and reopen.</p>
+      <p>The four boxes under it take exact chainage and elevation limits if you need the section to end at a stated value. <strong>Fit to photo</strong> snaps the frame to the placed photo, and <strong>Reset chainage</strong> puts it back to the full trace you drew. A cropped frame is kept when you save and reopen.</p>
+      <p>Resizing the frame also re-decides which units the section holds: ones the frame takes in are seeded, ones it no longer reaches are dropped. Only untouched seed boxes are dropped — a unit you have drawn on or given a height to is always kept, and named in the message, however far outside the frame it ends up.</p>
     </section>
 
     <section class="step">

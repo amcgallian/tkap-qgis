@@ -1,6 +1,6 @@
 <?xml version='1.0' encoding='utf-8'?>
 <plugins>
-  <pyqgis_plugin name="TKAP Tools" version="1.2.1">
+  <pyqgis_plugin name="TKAP Tools" version="1.3.0">
     <description>Field tools for the Türkmen-Karahöyük Archaeological Project: stratigraphic phasing, section drawing, and GNSS survey point conversion.</description>
     <about>The TKAP QGIS tools. Three tools live under the TKAP Tools menu:
 
@@ -11,7 +11,7 @@ Section Drawing: draw a section trace in plan view, pick the SUs that cross it, 
 Survey Points to Polygons: reads Emlid GNSS point exports and connects each outline's points in increment order into a closed polygon. Handles both SU_ points and F_ feature points in one pass, each against its own target layer, either replacing geometry on the existing layers or building onto new temporary ones. An outline shot out of perimeter order is reordered to uncross itself before the polygon is built.
 
 Licensed GPL-2.0-or-later. See LICENSE in the plugin folder.</about>
-    <version>1.2.1</version>
+    <version>1.3.0</version>
     <qgis_minimum_version>3.34</qgis_minimum_version>
     <homepage>https://github.com/amcgallian/tkap-qgis</homepage>
     <author_name>Türkmen-Karahöyük Archaeological Project (TKAP)</author_name>
@@ -22,9 +22,9 @@ Licensed GPL-2.0-or-later. See LICENSE in the plugin folder.</about>
     <experimental>False</experimental>
     <deprecated>False</deprecated>
     <file_name>tkap_tools.zip</file_name>
-    <download_url>https://github.com/amcgallian/tkap-qgis/releases/download/v1.2.1/tkap_tools.zip</download_url>
+    <download_url>https://github.com/amcgallian/tkap-qgis/releases/download/v1.3.0/tkap_tools.zip</download_url>
     <uploaded_by>Türkmen-Karahöyük Archaeological Project (TKAP)</uploaded_by>
-    <create_date>2026-08-04T04:10:33.689985</create_date>
-    <update_date>2026-08-04T04:10:33.689985</update_date>
+    <create_date>2026-08-04T04:38:41.194258</create_date>
+    <update_date>2026-08-04T04:38:41.194258</update_date>
   </pyqgis_plugin>
 </plugins>

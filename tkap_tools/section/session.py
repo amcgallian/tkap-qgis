@@ -633,8 +633,7 @@ class SectionSession:
                 f.id() for f in layer.getFeatures()
                 if not f["edited"]
             ]
-            if doomed:
-                layer.dataProvider().deleteFeatures(doomed)
+            self._delete_features(doomed)
 
         kept = {f["su_id"] for f in layer.getFeatures()}
         feats = []
@@ -815,15 +814,114 @@ class SectionSession:
         layer.triggerRepaint()
         return len(rebuilt)
 
+    def _delete_features(self, fids: list[int]) -> int:
+        """Delete features, going through the edit buffer when there is one.
+
+        The drawing layer is put into an edit session at the start and stays
+        there, so a provider-level delete writes underneath the buffer: the
+        layer goes on showing the feature, undo knows nothing about it, and the
+        buffer can put it back when it commits. Going through
+        ``QgsVectorLayer.deleteFeature`` instead means a removal behaves like
+        every other edit in the session, Ctrl+Z included.
+        """
+        layer = self.polygon_layer
+        if layer is None or not fids:
+            return 0
+        if layer.isEditable():
+            gone = sum(1 for fid in fids if layer.deleteFeature(fid))
+        else:
+            gone = len(fids) if layer.dataProvider().deleteFeatures(fids) else 0
+        layer.updateExtents()
+        layer.triggerRepaint()
+        return gone
+
     def remove_su(self, su_id: int) -> int:
-        """Drop an SU's polygons from the session. Returns how many went."""
+        """Drop an SU's polygons from the session. Returns how many went.
+
+        Leaves the roster alone -- see :meth:`remove_candidate` for taking the
+        unit out altogether.
+        """
         if self.polygon_layer is None:
             return 0
         doomed = [f.id() for f in self.polygon_layer.getFeatures() if f["su_id"] == su_id]
-        if doomed:
-            self.polygon_layer.dataProvider().deleteFeatures(doomed)
-            self.polygon_layer.triggerRepaint()
-        return len(doomed)
+        return self._delete_features(doomed)
+
+    def remove_candidate(self, su_id: int) -> int:
+        """Take a unit out of the section entirely: its polygons and its row.
+
+        Removing only the polygons left the unit sitting in the roster looking
+        like it had failed to draw, which is not what anyone means by Remove.
+        Add unit... is the way back.
+        """
+        gone = self.remove_su(su_id)
+        self.candidates = [c for c in self.candidates if c.su_id != su_id]
+        return gone
+
+    def is_pristine_seed(self, cand: SUCandidate) -> bool:
+        """True when this unit's polygon is still exactly the box it was seeded as.
+
+        Used to decide what a frame resize may quietly take away. The ``edited``
+        flag alone is not enough -- it is set when a height is typed in the
+        panel, but reshaping with the vertex tool never touches it -- so the
+        geometry is compared against a freshly built seed as well. Anything that
+        fails either test counts as work and is never removed automatically.
+        """
+        layer = self.polygon_layer
+        if layer is None:
+            return False
+        feats = [f for f in layer.getFeatures() if f["su_id"] == cand.su_id]
+        if not feats:
+            return True                      # nothing drawn, nothing to lose
+        fresh = _seed_geometry(cand)
+        for feat in feats:
+            if feat["edited"]:
+                return False
+            geom = feat.geometry()
+            if geom is None or fresh.isEmpty() or not geom.equals(fresh):
+                return False
+        return True
+
+    def resync_to_frame(self, source_layer=None) -> dict:
+        """Re-decide which units the section holds, now the frame has moved.
+
+        Cropping the frame is a statement about what the section covers, so the
+        roster should follow it: units the frame has taken in are seeded, and
+        units it no longer reaches go away.
+
+        Only *untouched* seeds are taken away. A unit that has been drawn or
+        given a height is kept however far outside the frame it ends up, and
+        named in the result, because silently deleting someone's tracing to
+        tidy a list is never the right trade. Nothing is lost from the figure
+        either way -- the export is clipped to the frame regardless.
+
+        Returns {"added": [...], "removed": [...], "kept": [...]} of SU numbers.
+        """
+        from .su_source import discover_spatial
+
+        layer = source_layer or self.source_layer
+        result = {"added": [], "removed": [], "kept": []}
+        if layer is None or self.polygon_layer is None:
+            return result
+
+        line = self.line
+        found = discover_spatial(layer, line, clip_to=(line.x_min, line.x_max))
+        in_frame = {c.su_id: c for c in found}
+        current = {c.su_id: c for c in self.candidates}
+
+        fresh = [c for su_id, c in in_frame.items() if su_id not in current]
+        if fresh:
+            self.add_candidates(fresh)
+            result["added"] = [c.su_number for c in fresh]
+
+        for su_id, cand in list(current.items()):
+            if su_id in in_frame:
+                continue
+            if self.is_pristine_seed(cand):
+                self.remove_candidate(su_id)
+                result["removed"].append(cand.su_number)
+            else:
+                result["kept"].append(cand.su_number)
+        return result
 
     def has_polygon_for(self, su_id: int) -> bool:
         if self.polygon_layer is None:

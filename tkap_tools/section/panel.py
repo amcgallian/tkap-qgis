@@ -7,7 +7,7 @@ figure outputs and finishing the session).
 
 from __future__ import annotations
 
-from qgis.core import QgsMapLayerProxyModel
+from qgis.core import Qgis, QgsMapLayerProxyModel
 from qgis.gui import QgsCollapsibleGroupBox, QgsMapLayerComboBox
 from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.PyQt.QtGui import QColor
@@ -17,7 +17,6 @@ from qgis.PyQt.QtWidgets import (
     QDockWidget,
     QDoubleSpinBox,
     QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -44,6 +43,16 @@ SEED_COLOURS = {
     SeedSource.HALF_MEASURED: WARN,
     SeedSource.FULL_HEIGHT: NEUTRAL,
 }
+
+
+def _list_sus(numbers, limit: int = 6) -> str:
+    """'SU 12, SU 15 and 3 more' -- a roster change named, not just counted."""
+    numbers = [str(n) for n in numbers]
+    if len(numbers) <= limit:
+        head = ", ".join(f"SU {n}" for n in numbers)
+        return head
+    shown = ", ".join(f"SU {n}" for n in numbers[:limit])
+    return f"{shown} and {len(numbers) - limit} more"
 
 
 class SectionPanel(QDockWidget):
@@ -89,6 +98,14 @@ class SectionPanel(QDockWidget):
         self.summary_label.setWordWrap(True)
         layout.addWidget(self.summary_label)
 
+        # Every section of the panel collapses. The roster is the one that has
+        # to be able to grow, so it is the only one given stretch, and it starts
+        # open -- collapsing it would leave the panel with nothing in it.
+        units_box = QgsCollapsibleGroupBox("Stratigraphic units")
+        units_box.setObjectName("TkapSectionUnitsBox")
+        units_layout = QVBoxLayout(units_box)
+        layout.addWidget(units_box, 1)
+
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
             ["Show", "SU", "Type", "Base", "Top"]
@@ -106,12 +123,12 @@ class SectionPanel(QDockWidget):
         header.setSectionResizeMode(2, QHeaderView.Stretch)
         self.table.itemSelectionChanged.connect(self._on_selection)
         self.table.itemChanged.connect(self._on_item_changed)
-        layout.addWidget(self.table, 1)
+        units_layout.addWidget(self.table, 1)
 
         hint = QLabel("Type a Base or Top value to move a unit to that height.")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: grey; font-size: 10px;")
-        layout.addWidget(hint)
+        units_layout.addWidget(hint)
 
         vis_row = QHBoxLayout()
         for label, tip, slot in (
@@ -126,20 +143,22 @@ class SectionPanel(QDockWidget):
             b.setToolTip(tip)
             b.clicked.connect(slot)
             vis_row.addWidget(b)
-        layout.addLayout(vis_row)
+        units_layout.addLayout(vis_row)
 
         row = QHBoxLayout()
         for label, tip, slot in (
             ("Zoom to", "Zoom to the selected unit.", self._zoom_to_selected),
             ("Add unit...", "Add a unit that was not picked up.", self._add_sus),
-            ("Remove", "Take the selected unit off the drawing.",
+            ("Re-seed", "Replace the selected unit's polygon with a fresh box.",
+             self._reseed_selected),
+            ("Remove", "Take the selected unit off the drawing entirely.",
              self._remove_selected),
         ):
             b = QPushButton(label)
             b.setToolTip(tip)
             b.clicked.connect(slot)
             row.addWidget(b)
-        layout.addLayout(row)
+        units_layout.addLayout(row)
 
         layout.addWidget(self._build_sources_box())
         layout.addWidget(self._build_frame_box())
@@ -347,7 +366,41 @@ class SectionPanel(QDockWidget):
             return
         if self._frame_tool is not None:
             self._frame_tool.sync_from_session()
+        self._resync_units()
         self.iface.mapCanvas().refresh()
+
+    def _resync_units(self) -> None:
+        """Re-decide the roster for the frame as it now stands, and report it.
+
+        Run after every route that moves the frame, because which units the
+        section holds is a consequence of what it covers. Silent when nothing
+        changed, which is the common case once a section has settled.
+        """
+        changes = self.session.resync_to_frame(self.source_layer)
+        if not any(changes.values()):
+            return
+        self.refresh()
+
+        parts = []
+        if changes["added"]:
+            parts.append(f"added {_list_sus(changes['added'])}")
+        if changes["removed"]:
+            parts.append(f"removed {_list_sus(changes['removed'])}")
+        message = f"Frame changed: {', '.join(parts)}." if parts else ""
+        if changes["kept"]:
+            # Worth saying out loud. These are outside the frame, so they will
+            # not appear in the export, but they are still in the section and
+            # still hold whatever was drawn on them.
+            message += (
+                f" {_list_sus(changes['kept'])} now sit outside the frame but "
+                "were kept because they have been drawn on."
+            )
+        if message.strip():
+            self.iface.messageBar().pushMessage(
+                "TKAP Section", message.strip(),
+                level=Qgis.Info if not changes["kept"] else Qgis.Warning,
+                duration=9,
+            )
 
     def _on_resize_toggled(self, on: bool) -> None:
         canvas = self.iface.mapCanvas()
@@ -380,6 +433,7 @@ class SectionPanel(QDockWidget):
 
     def _on_frame_dragged(self, x_min, z_min, x_max, z_max) -> None:
         self.refresh_frame()
+        self._resync_units()
 
     def _fit_frame_to_photo(self) -> None:
         if not self.session.fit_frame_to_photo():
@@ -398,6 +452,7 @@ class SectionPanel(QDockWidget):
         self.refresh_frame()
         if self._frame_tool is not None:
             self._frame_tool.sync_from_session()
+        self._resync_units()
         self.iface.mapCanvas().refresh()
 
     def release_frame_tool(self) -> None:
@@ -411,7 +466,8 @@ class SectionPanel(QDockWidget):
         self._frame_tool = None
 
     def _build_output_box(self) -> QWidget:
-        box = QGroupBox("Export")
+        box = QgsCollapsibleGroupBox("Export")
+        box.setObjectName("TkapSectionExportBox")
         layout = QVBoxLayout(box)
 
         self.title_edit = QLineEdit(self.session.default_title())
@@ -715,12 +771,15 @@ class SectionPanel(QDockWidget):
             )
 
     def _remove_selected(self) -> None:
+        """Take the selected unit out of the section: its polygon and its row."""
         cand = self._selected_candidate()
         if cand is None:
+            QMessageBox.information(
+                self, "Nothing selected", "Select a unit in the table first."
+            )
             return
-        removed = self.session.remove_su(cand.su_id)
-        if removed:
-            cand.include = False
+        cand.include = False
+        self.session.remove_candidate(cand.su_id)
         self.refresh()
 
     def _reseed_selected(self) -> None:

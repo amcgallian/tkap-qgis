@@ -325,8 +325,17 @@ class Span:
 
     def clipped_to(self, length: float) -> "Span | None":
         """Trim to the section's own chainage range, or None if fully outside."""
-        lo = max(self.x_min, 0.0)
-        hi = min(self.x_max, length)
+        return self.clipped_between(0.0, length)
+
+    def clipped_between(self, lo_limit: float, hi_limit: float) -> "Span | None":
+        """Trim to an arbitrary chainage range, or None if fully outside.
+
+        The range is not always 0..length. Once the frame has been cropped or
+        extended it is the frame that decides what the section covers, and a
+        unit that no longer reaches into it is not part of the drawing.
+        """
+        lo = max(self.x_min, lo_limit)
+        hi = min(self.x_max, hi_limit)
         if hi - lo <= 1e-6:
             return None
         return Span(lo, hi, self.on_trace)
