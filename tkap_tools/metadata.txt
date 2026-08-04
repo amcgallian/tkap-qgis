@@ -26,7 +26,7 @@ about=The TKAP QGIS tools. Three tools live under the TKAP Tools
     uncross itself before the polygon is built.
     .
     Licensed GPL-2.0-or-later. See LICENSE in the plugin folder.
-version=1.4.1
+version=1.4.2
 author=Türkmen-Karahöyük Archaeological Project (TKAP)
 email=andymcgallian@gmail.com
 
@@ -41,7 +41,20 @@ experimental=False
 deprecated=False
 hasProcessingProvider=no
 
-changelog=1.4.1
+changelog=1.4.2
+    - Section Drawing: resizing the frame no longer re-decides which units the
+      section holds. Cropping the frame is a framing decision, and having rows
+      appear and disappear in the middle of it was more annoying than useful.
+      Which units a section holds is set at setup and changed only by
+      "Add unit..." and "Remove".
+    - Fix: the section panel could force the whole QGIS window taller. A dock
+      hands its minimum height to the main window, so a tall panel grew the
+      window instead of getting a scroll bar - measured at 879 px before, 150 px
+      now. The panel scrolls, and Save and Finish sit outside the scrolling
+      area so the way out is always on screen.
+    - Fix: collapsing the panel's sections left them spread down the middle of
+      it. They now stack against the top, with the spare height below them.
+    1.4.1
     - Fix: the wireframe backdrop colour appeared to do nothing. It was being
       drawn correctly, but a placed ortho is axis-aligned and fills the frame,
       so the backdrop sat behind it with nothing to show through. There is now

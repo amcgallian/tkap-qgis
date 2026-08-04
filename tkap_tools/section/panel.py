@@ -7,7 +7,7 @@ figure outputs and finishing the session).
 
 from __future__ import annotations
 
-from qgis.core import Qgis, QgsMapLayerProxyModel
+from qgis.core import QgsMapLayerProxyModel
 from qgis.gui import QgsCollapsibleGroupBox, QgsMapLayerComboBox
 from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.PyQt.QtGui import QColor
@@ -18,12 +18,14 @@ from qgis.PyQt.QtWidgets import (
     QDockWidget,
     QDoubleSpinBox,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -51,16 +53,6 @@ SEED_COLOURS = {
 #: Type, Base, Top. Only a starting point -- every column can be dragged, and
 #: the last one takes whatever is left over.
 COLUMN_WIDTHS = (46, 52, 130, 110, 120, 74, 74)
-
-
-def _list_sus(numbers, limit: int = 6) -> str:
-    """'SU 12, SU 15 and 3 more' -- a roster change named, not just counted."""
-    numbers = [str(n) for n in numbers]
-    if len(numbers) <= limit:
-        head = ", ".join(f"SU {n}" for n in numbers)
-        return head
-    shown = ", ".join(f"SU {n}" for n in numbers[:limit])
-    return f"{shown} and {len(numbers) - limit} more"
 
 
 class SectionPanel(QDockWidget):
@@ -104,19 +96,40 @@ class SectionPanel(QDockWidget):
 
     def _build_ui(self) -> None:
         root = QWidget()
-        layout = QVBoxLayout(root)
+        outer = QVBoxLayout(root)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        # The panel scrolls, and Save/Finish sit outside the scroll area. A dock
+        # widget hands its minimum height to the main window, so a tall panel
+        # does not get a scroll bar -- it pushes the whole QGIS window taller.
+        # Behind a scroll area the minimum is small, the window keeps its size,
+        # and the way out is always on screen.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        # Sideways scrolling would mean the dock is too narrow, not too tall;
+        # let the widgets compress and the table keep its own bar.
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
 
         self.summary_label = QLabel()
         self.summary_label.setWordWrap(True)
         layout.addWidget(self.summary_label)
 
         # Every section of the panel collapses. The roster is the one that has
-        # to be able to grow, so it is the only one given stretch, and it starts
-        # open -- collapsing it would leave the panel with nothing in it.
+        # to be able to grow, so it takes nearly all the spare height, and it
+        # starts open -- collapsing it would leave the panel with nothing in it.
+        # The 100:1 against the closing stretch is what makes collapsed boxes
+        # stack upwards: a collapsed box is height-capped and cannot take its
+        # share, so the leftover falls through to the stretch at the bottom
+        # instead of being spread between the boxes.
         units_box = QgsCollapsibleGroupBox("Stratigraphic units")
         units_box.setObjectName("TkapSectionUnitsBox")
         units_layout = QVBoxLayout(units_box)
-        layout.addWidget(units_box, 1)
+        layout.addWidget(units_box, 100)
 
         self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(
@@ -145,6 +158,9 @@ class SectionPanel(QDockWidget):
         header.setSectionsMovable(True)
         self.table.itemSelectionChanged.connect(self._on_selection)
         self.table.itemChanged.connect(self._on_item_changed)
+        # Modest, so a long roster does not set the dock's minimum height. It
+        # grows into whatever the panel has once it is on screen.
+        self.table.setMinimumHeight(110)
         units_layout.addWidget(self.table, 1)
 
         hint = QLabel(
@@ -189,16 +205,21 @@ class SectionPanel(QDockWidget):
         layout.addWidget(self._build_sources_box())
         layout.addWidget(self._build_frame_box())
         layout.addWidget(self._build_output_box())
+        # Everything collapses upwards against this.
+        layout.addStretch(1)
+
+        scroll.setWidget(panel)
+        outer.addWidget(scroll, 1)
 
         save = QPushButton("Save section...")
         save.setToolTip("Save the drawing so it can be opened and edited later.")
         save.clicked.connect(lambda: self.saveRequested.emit())
-        layout.addWidget(save)
+        outer.addWidget(save)
 
         finish = QPushButton("Finish")
         finish.setToolTip("Close the section and put your project back.")
         finish.clicked.connect(self._on_finish)
-        layout.addWidget(finish)
+        outer.addWidget(finish)
 
         self.setWidget(root)
 
@@ -392,41 +413,7 @@ class SectionPanel(QDockWidget):
             return
         if self._frame_tool is not None:
             self._frame_tool.sync_from_session()
-        self._resync_units()
         self.iface.mapCanvas().refresh()
-
-    def _resync_units(self) -> None:
-        """Re-decide the roster for the frame as it now stands, and report it.
-
-        Run after every route that moves the frame, because which units the
-        section holds is a consequence of what it covers. Silent when nothing
-        changed, which is the common case once a section has settled.
-        """
-        changes = self.session.resync_to_frame(self.source_layer)
-        if not any(changes.values()):
-            return
-        self.refresh()
-
-        parts = []
-        if changes["added"]:
-            parts.append(f"added {_list_sus(changes['added'])}")
-        if changes["removed"]:
-            parts.append(f"removed {_list_sus(changes['removed'])}")
-        message = f"Frame changed: {', '.join(parts)}." if parts else ""
-        if changes["kept"]:
-            # Worth saying out loud. These are outside the frame, so they will
-            # not appear in the export, but they are still in the section and
-            # still hold whatever was drawn on them.
-            message += (
-                f" {_list_sus(changes['kept'])} now sit outside the frame but "
-                "were kept because they have been drawn on."
-            )
-        if message.strip():
-            self.iface.messageBar().pushMessage(
-                "TKAP Section", message.strip(),
-                level=Qgis.Info if not changes["kept"] else Qgis.Warning,
-                duration=9,
-            )
 
     def _on_resize_toggled(self, on: bool) -> None:
         canvas = self.iface.mapCanvas()
@@ -459,7 +446,6 @@ class SectionPanel(QDockWidget):
 
     def _on_frame_dragged(self, x_min, z_min, x_max, z_max) -> None:
         self.refresh_frame()
-        self._resync_units()
 
     def _fit_frame_to_photo(self) -> None:
         if not self.session.fit_frame_to_photo():
@@ -478,7 +464,6 @@ class SectionPanel(QDockWidget):
         self.refresh_frame()
         if self._frame_tool is not None:
             self._frame_tool.sync_from_session()
-        self._resync_units()
         self.iface.mapCanvas().refresh()
 
     def release_frame_tool(self) -> None:

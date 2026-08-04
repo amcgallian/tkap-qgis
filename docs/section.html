@@ -103,7 +103,7 @@
       <p>The dashed cyan box is the section frame, and it is exactly what the exported figure covers. Press <strong>Resize on canvas</strong> in the panel and drag its corners or edges; the drawing follows. Escape, or the button again, gives the normal tools back.</p>
       <p>This is the way to deal with an ortho that covers more wall than the section. Rather than cropping the raster and re-rectifying, pull the frame in to the part you want and export. The scale, page size and elevation axis all recompute from the cropped frame.</p>
       <p>The four boxes under it take exact chainage and elevation limits if you need the section to end at a stated value. <strong>Fit to photo</strong> snaps the frame to the placed photo, and <strong>Reset chainage</strong> puts it back to the full trace you drew. A cropped frame is kept when you save and reopen.</p>
-      <p>Resizing the frame also re-decides which units the section holds: ones the frame takes in are seeded, ones it no longer reaches are dropped. Only untouched seed boxes are dropped — a unit you have drawn on or given a height to is always kept, and named in the message, however far outside the frame it ends up.</p>
+      <p>Resizing the frame changes what the figure covers and nothing else. Which units the section holds is decided at setup and changed only by <strong>Add unit…</strong> and <strong>Remove</strong>, so cropping never adds or takes away rows behind your back.</p>
     </section>
 
     <section class="step">

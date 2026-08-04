@@ -334,18 +334,15 @@ def discover_spatial(
     line: SectionLine,
     *,
     restrict_to: Iterable[int] | None = None,
-    clip_to: tuple[float, float] | None = None,
 ) -> list[SUCandidate]:
     """SUs meeting the buffered trace, with their chainage extents.
 
     ``restrict_to`` optionally limits the search to a set of feature ids, which
     is how the relational mode narrows to one space before measuring extents.
 
-    ``clip_to`` is the chainage range a unit has to reach into to count,
-    defaulting to the trace itself (0..length). The session passes the frame's
-    range instead when re-deciding the roster after a resize, so cropping the
-    frame drops the units it no longer covers and extending it picks up units
-    that run past the end of the trace.
+    A unit has to reach into the trace itself (0..length) to count. Cropping the
+    frame afterwards deliberately does not re-run this: which units a section
+    holds is decided once, at setup, and changed only by Add unit... and Remove.
     """
     trace, buf = _trace_geometries(line)
     xform = _transform_to_site(layer)
@@ -372,9 +369,8 @@ def discover_spatial(
         if xform is not None:
             geom = QgsGeometry(geom)
             geom.transform(xform)
-        lo, hi = clip_to if clip_to is not None else (0.0, line.length)
         spans = _spans_for(geom, line, trace, buf)
-        spans = [c for c in (s.clipped_between(lo, hi) for s in spans) if c]
+        spans = [c for c in (s.clipped_to(line.length) for s in spans) if c]
         if not spans:
             continue
         out.append(_candidate_from_feature(feat, fmap, spans))
