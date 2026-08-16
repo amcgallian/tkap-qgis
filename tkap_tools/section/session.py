@@ -20,6 +20,8 @@ user's project in a broken state.
 
 from __future__ import annotations
 
+import os
+import shutil
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -48,6 +50,7 @@ from qgis.PyQt.QtGui import QColor
 
 from .photo import Fit, write_placed_raster
 from .section_geom import SectionLine, section_crs_wkt
+from .store import placed_photo_name
 from .su_source import SUCandidate, SeedSource
 
 GROUP_NAME = "Section drawing"
@@ -243,6 +246,19 @@ class SectionSession:
     #: The photo this section was rectified against, recorded so a saved
     #: section can find it again.
     photo_source: str = field(init=False, default="")
+    #: Where the placed raster was last written or found. Held separately from
+    #: ``photo_layer`` so it survives the layer failing to load: reading it off
+    #: the layer meant that reopening a section whose backdrop had gone, and
+    #: then saving, wrote an empty path and destroyed the association for good.
+    photo_placed: str = field(init=False, default="")
+    #: How the photo was placed, so it can be placed again without the user
+    #: having to pick every control point a second time.
+    photo_fit: Fit | None = field(init=False, default=None)
+    #: The control points behind that fit, kept so a re-pick starts pre-filled.
+    photo_points: list = field(init=False, default_factory=list)
+    #: The geoid separation those points were fitted with. Refitting without it
+    #: would silently move an ellipsoidal survey by about 36 m.
+    photo_separation: float = field(init=False, default=0.0)
     #: Where this session was last saved, so Save can overwrite without asking.
     saved_to: str = field(init=False, default="")
 
@@ -293,6 +309,14 @@ class SectionSession:
                 root.removeChildNode(group)
         except Exception:
             pass
+
+        # The scratch copy of the placed photo, if this section was never saved.
+        # Once it has been saved the backdrop that matters lives beside the
+        # .gpkg and this one is dead weight -- and it has to go after the layers
+        # above, or Windows still has the file open.
+        if self._workdir is not None:
+            shutil.rmtree(self._workdir, ignore_errors=True)
+            self._workdir = None
 
         if restore:
             for restore_step in (
@@ -654,26 +678,78 @@ class SectionSession:
         self._redraw_frame()
         return True
 
-    def attach_photo(self, source_path: str, fit: Fit, *, workdir: Path | None = None) -> str:
-        """Place the photo into section space and load it under the polygons."""
-        self._workdir = workdir or Path(tempfile.mkdtemp(prefix="tkap_section_"))
-        self._workdir.mkdir(parents=True, exist_ok=True)
-        # Remembered so a saved section can name the photo it was built from.
-        self.photo_source = str(source_path)
-        stem = Path(source_path).stem
-        out = self._workdir / f"{stem}_section.tif"
+    def _placed_path(self, source_path: str, workdir: Path | None) -> Path:
+        """Where the placed raster for ``source_path`` belongs.
 
-        write_placed_raster(source_path, out, fit, self.crs.toWkt())
+        Beside the saved section whenever there is one. A placed ortho written
+        to the temp directory is swept by Windows Storage Sense days later and
+        is invisible to every other machine, so a section that had been saved,
+        closed and come back to had simply lost its backdrop with no way to get
+        it back. Temp is now only for a section that has not been saved yet.
+        """
+        if workdir is not None:
+            return Path(workdir) / f"{Path(source_path).stem}_section.tif"
+        if self.saved_to:
+            gpkg = Path(self.saved_to)
+            return gpkg.parent / placed_photo_name(gpkg)
+        # Not saved anywhere yet. Kept on ``_workdir`` so ``end`` can clear it.
+        if self._workdir is None:
+            self._workdir = Path(tempfile.mkdtemp(prefix="tkap_section_"))
+        return self._workdir / f"{Path(source_path).stem}_section.tif"
+
+    def attach_photo(
+        self,
+        source_path: str,
+        fit: Fit,
+        *,
+        points: list | None = None,
+        separation: float = 0.0,
+        workdir: Path | None = None,
+    ) -> str:
+        """Place the photo into section space and load it under the polygons.
+
+        ``points`` and ``separation`` are what produced ``fit``. They are not
+        needed to do the placement -- they are recorded so a section that later
+        loses its backdrop can have it put back without the control points
+        being picked all over again.
+        """
+        out = self._placed_path(source_path, workdir)
+        out.parent.mkdir(parents=True, exist_ok=True)
+
+        # Write alongside and move into place, rather than straight onto ``out``.
+        # Re-placing a photo writes to the path the current raster layer is
+        # already holding open, and GDAL writing into a file QGIS has open
+        # yields a corrupt raster on Windows -- a backdrop that loads, looks
+        # plausible and is wrong, which is worse than one that is missing.
+        #
+        # The .tif has to stay on the end. A mirrored or projective placement is
+        # written by gdal.Warp, which picks its output driver from the file
+        # extension, and hands back None for anything it cannot recognise -- so
+        # naming this "....tif.tmp" silently broke exactly those placements.
+        tmp = out.with_name(f"{out.stem}.partial{out.suffix}")
+        write_placed_raster(source_path, tmp, fit, self.crs.toWkt())
+
+        project = QgsProject.instance()
+        # Let go of the old file before replacing it. It is about to be
+        # overwritten either way, so there is nothing left to protect.
+        if self.photo_layer is not None:
+            project.removeMapLayer(self.photo_layer.id())
+            self.photo_layer = None
+        os.replace(tmp, out)
 
         layer = QgsRasterLayer(str(out), PHOTO_LAYER_NAME)
         if not layer.isValid():
             raise RuntimeError(f"Placed raster failed to load: {out}")
 
-        if self.photo_layer is not None:
-            QgsProject.instance().removeMapLayer(self.photo_layer.id())
-        QgsProject.instance().addMapLayer(layer, False)
+        project.addMapLayer(layer, False)
         self._group().addLayer(layer)      # below the polygons
         self.photo_layer = layer
+
+        self.photo_source = str(source_path)
+        self.photo_placed = str(out)
+        self.photo_fit = fit
+        self.photo_points = list(points or [])
+        self.photo_separation = float(separation)
         return str(out)
 
     def reload_placed_photo(self, placed_path: str) -> None:
@@ -691,6 +767,7 @@ class SectionSession:
         QgsProject.instance().addMapLayer(layer, False)
         self._group().addLayer(layer)
         self.photo_layer = layer
+        self.photo_placed = str(placed_path)
 
     # --------------------------------------------------------------- seeding --
 
@@ -1020,7 +1097,6 @@ class SectionSession:
         if self.polygon_layer is None:
             return False
         return any(f["su_id"] == su_id for f in self.polygon_layer.getFeatures())
-
     # ------------------------------------------------------------------ view --
 
     def section_rectangle(self, pad: float = 0.25) -> QgsRectangle:
@@ -1072,3 +1148,50 @@ class SectionSession:
             f"{self.line.length:.2f} m long, azimuth {self.line.azimuth:.1f} deg - "
             f"{included} SUs"
         )
+
+
+def looks_placed(path: str, session: SectionSession) -> bool:
+    """Whether ``path`` is already a raster sitting in this section's space.
+
+    Lets a photo being re-linked be told apart from the *placed* copy of it: an
+    already-rectified GeoTIFF is loaded as it stands, while a plain photograph
+    has to be put through the fit again.
+
+    Two independent tests, because neither is sufficient alone. The CRS check
+    rules out a plain JPG (no projection at all) and a plan-view ortho; the
+    extent check is what actually proves it, since section space sits at
+    y around 1030 and x around 0-10 while a UTM ortho sits at y around
+    4,000,000.
+
+    The CRSs are compared as PROJ strings rather than with ``==``. A placed
+    raster carries the section CRS written out as WKT1, which drops the REMARK
+    node holding the trace parameters, so an equality test says no to a raster
+    this very section produced. What survives the round trip is the projection
+    itself, which is all this needs to ask.
+    """
+    try:
+        from osgeo import gdal
+
+        gdal.UseExceptions()
+        ds = gdal.Open(str(path))
+        if ds is None:
+            return False
+        proj = ds.GetProjection()
+        if not proj:
+            return False
+
+        crs = QgsCoordinateReferenceSystem()
+        if not crs.createFromWkt(proj) or crs.toProj() != session.crs.toProj():
+            return False
+
+        gt = ds.GetGeoTransform()
+        w, h = ds.RasterXSize, ds.RasterYSize
+        xs = [gt[0], gt[0] + gt[1] * w + gt[2] * h]
+        ys = [gt[3], gt[3] + gt[4] * w + gt[5] * h]
+        raster = QgsRectangle(min(xs), min(ys), max(xs), max(ys))
+        x_min, y_min, x_max, y_max = session.line.section_extent()
+        return raster.intersects(QgsRectangle(x_min, y_min, x_max, y_max))
+    except Exception:
+        # Anything unreadable is simply not a placed raster; the caller falls
+        # back to warping it, which reports its own failure properly.
+        return False

@@ -48,7 +48,6 @@ from qgis.PyQt.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
-    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -56,20 +55,13 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
-from .gcp_view import PhotoView, PlacedPreview
+from .gcp_picker import GcpPickerWidget
 from .photo import (
-    DEFAULT_GEOID_SEPARATION,
     DEFAULT_WORKING_DATUM,
     ControlPoint,
     Fit,
-    FitModel,
     HeightDatum,
-    best_model_for,
     calibrate_separation,
-    fit_transform,
-    load_emlid_csv,
-    select_for_section,
-    suggest_separation,
 )
 from .section_geom import SectionLine
 from .su_source import (
@@ -98,24 +90,6 @@ SEED_COLOURS = {
 }
 
 
-def _lonlat_transformer():
-    """(lon, lat) -> EPSG:32636, for Emlid files with empty projected columns."""
-    from osgeo import osr
-
-    osr.UseExceptions()
-    src = osr.SpatialReference(); src.ImportFromEPSG(4326)
-    src.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
-    dst = osr.SpatialReference(); dst.ImportFromEPSG(32636)
-    dst.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
-    tr = osr.CoordinateTransformation(src, dst)
-
-    def convert(lon: float, lat: float) -> tuple[float, float]:
-        e, n, _ = tr.TransformPoint(lon, lat)
-        return e, n
-
-    return convert
-
-
 class SectionSetupDialog(QDialog):
     """Collects the SU list, the photo placement, and the vertical extent."""
 
@@ -127,11 +101,6 @@ class SectionSetupDialog(QDialog):
 
         self.line = line
         self.candidates: list[SUCandidate] = []
-        self.control_points: list[ControlPoint] = []
-        self.fit: Fit | None = None
-        self.photo_path: str | None = None
-        self._image_size = (0, 0)
-        self._picking_row: int | None = None
         #: What the last control-point file had to say about itself, kept so the
         #: note under the datum controls can be rebuilt when the datum or the
         #: correction changes rather than only when a file is loaded.
@@ -141,6 +110,10 @@ class SectionSetupDialog(QDialog):
 
         self._build_ui()
         self.line.height_datum = self._working_datum().value
+        # Only once the whole dialog exists: the picker answers with a fit, and
+        # acting on one reaches into the extent box, which is built after the
+        # tabs.
+        self.picker.set_datum(self._working_datum(), self.separation_spin.value())
         self._refresh_trace_labels()
         self._on_style_source_changed()
         # There is no photo yet when the dialog opens, so the "take it from the
@@ -148,6 +121,27 @@ class SectionSetupDialog(QDialog):
         # nothing with the height boxes greyed out beside it.
         self._sync_extent_source()
         self.refresh_candidates()
+
+    # The picking half of this dialog lives in GcpPickerWidget, so that
+    # re-linking a saved section's backdrop reuses it rather than growing a
+    # second copy. These delegate, so everything below reads the same as it did
+    # when the fields were local.
+
+    @property
+    def control_points(self) -> list[ControlPoint]:
+        return self.picker.control_points
+
+    @property
+    def fit(self) -> Fit | None:
+        return self.picker.fit
+
+    @property
+    def photo_path(self) -> str | None:
+        return self.picker.photo_path
+
+    @property
+    def _image_size(self) -> tuple[int, int]:
+        return self.picker.image_size
 
     # -------------------------------------------------------------- building --
 
@@ -324,91 +318,18 @@ class SectionSetupDialog(QDialog):
         return page
 
     def _build_photo_tab(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-
-        row = QHBoxLayout()
-        self.photo_edit = QLineEdit()
-        self.photo_edit.setPlaceholderText("Section photo or orthophoto...")
-        self.photo_edit.setReadOnly(True)
-        browse = QPushButton("Load photo...")
-        browse.clicked.connect(self._browse_photo)
-        row.addWidget(QLabel("Photo"))
-        row.addWidget(self.photo_edit, 1)
-        row.addWidget(browse)
-        layout.addLayout(row)
-
-        splitter = QSplitter(Qt.Horizontal)
-
-        # Left column, two clearly separated jobs so the two images are never
-        # confused: the TOP box is the working photo you click control points
-        # on; the BOTTOM box is a read-only preview of how that photo will end
-        # up in the drawing. Titled, colour-accented group boxes keep "where I
-        # click" and "what I'll get" distinct.
-        left_split = QSplitter(Qt.Vertical)
-
-        pick_group = QGroupBox(
-            "Working photo  -  click your control points here"
-        )
-        pick_group.setStyleSheet(
-            "QGroupBox { font-weight: bold; } "
-            "QGroupBox::title { color: #1565c0; }"
-        )
-        pick_layout = QVBoxLayout(pick_group)
-        pick_layout.setContentsMargins(6, 6, 6, 6)
-        self.photo_view = PhotoView()
-        self.photo_view.pointClicked.connect(self._on_photo_clicked)
-        pick_layout.addWidget(self.photo_view)
-        left_split.addWidget(pick_group)
-
-        preview_group = QGroupBox(
-            "Preview  -  how the photo will sit in the drawing (read-only)"
-        )
-        preview_group.setStyleSheet(
-            "QGroupBox { font-weight: bold; } "
-            "QGroupBox::title { color: #2e7d32; }"
-        )
-        preview_layout = QVBoxLayout(preview_group)
-        preview_layout.setContentsMargins(6, 6, 6, 6)
-        preview_caption = QLabel(
-            "You do not draw here - this only shows the result. It updates as "
-            "you add control points; you trace the units on the main map after "
-            "Start drawing."
-        )
-        preview_caption.setWordWrap(True)
-        preview_caption.setStyleSheet("color: grey; font-size: 10px;")
-        preview_layout.addWidget(preview_caption)
-        self.placed_preview = PlacedPreview()
-        preview_layout.addWidget(self.placed_preview, 1)
-        left_split.addWidget(preview_group)
-
-        left_split.setStretchFactor(0, 3)
-        left_split.setStretchFactor(1, 2)
-        splitter.addWidget(left_split)
-
-        right = QWidget()
-        rlayout = QVBoxLayout(right)
-
-        gcp_row = QHBoxLayout()
-        load_gcp = QPushButton("Load control points...")
-        load_gcp.clicked.connect(self._browse_gcps)
-        gcp_row.addWidget(load_gcp)
-        self.pick_button = QPushButton("Click points on the photo")
-        self.pick_button.setToolTip(
-            "Pick a point in the list, then click where it is in the photo."
-        )
-        self.pick_button.setCheckable(True)
-        self.pick_button.toggled.connect(self._on_pick_toggled)
-        gcp_row.addWidget(self.pick_button)
-        clear = QPushButton("Undo this point")
-        clear.setToolTip("Forget where the selected point was clicked.")
-        clear.clicked.connect(self._clear_current_pick)
-        gcp_row.addWidget(clear)
-        rlayout.addLayout(gcp_row)
+        # The photo, the control-point table and the fit are all
+        # GcpPickerWidget's; what stays here is everything that decides
+        # something about the *section* rather than about the placement.
+        self.picker = GcpPickerWidget(self.line)
+        self.picker.fitChanged.connect(self._on_fit_changed)
+        self.picker.notesChanged.connect(self._on_gcp_notes)
+        self.picker.separationSuggested.connect(self.separation_spin_set)
+        self.picker.photoChanged.connect(lambda _path: self._update_ok_state())
 
         self.datum_label = QLabel()
         self.datum_label.setWordWrap(True)
-        rlayout.addWidget(self.datum_label)
+        self.picker.extra_layout.addWidget(self.datum_label)
 
         datum_form = QFormLayout()
 
@@ -466,39 +387,38 @@ class SectionSetupDialog(QDialog):
         )
         calibrate.clicked.connect(self._calibrate_separation)
         datum_form.addRow("", calibrate)
-        rlayout.addLayout(datum_form)
+        self.picker.extra_layout.addLayout(datum_form)
+        return self.picker
 
-        self.gcp_table = QTableWidget(0, 6)
-        self.gcp_table.setHorizontalHeaderLabels(
-            ["Use", "Name", "Height", "Off the wall", "Clicked at", "Error"]
-        )
-        self.gcp_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.gcp_table.setSelectionMode(QAbstractItemView.SingleSelection)
-        self.gcp_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.gcp_table.verticalHeader().setVisible(False)
-        self.gcp_table.itemSelectionChanged.connect(self._on_gcp_selection)
-        self.gcp_table.itemChanged.connect(self._on_gcp_check_changed)
-        rlayout.addWidget(self.gcp_table, 1)
+    def separation_spin_set(self, value: float) -> None:
+        """Take the separation a loaded control-point file implies.
 
-        fit_row = QHBoxLayout()
-        fit_row.addWidget(QLabel("How to place it"))
-        self.model_combo = QComboBox()
-        self.model_combo.addItem("Choose for me", None)
-        for m in FitModel:
-            self.model_combo.addItem(m.label, m)
-        self.model_combo.currentIndexChanged.connect(self.recompute_fit)
-        fit_row.addWidget(self.model_combo, 1)
-        rlayout.addLayout(fit_row)
+        A slot rather than a direct connection to ``setValue`` so the intent is
+        named: the setup dialog is free to accept the suggestion, where a
+        re-link is not -- its section is already drawn against a gap.
+        """
+        self.separation_spin.setValue(value)
 
-        self.fit_label = QLabel("No fit yet.")
-        self.fit_label.setWordWrap(True)
-        rlayout.addWidget(self.fit_label)
+    def _on_gcp_notes(self, message: str) -> None:
+        # Recorded before anything else runs: setting the spin box re-runs the
+        # note, and it must find the new text already in place.
+        self._gcp_notes = message
+        self._refresh_datum_note()
+        self._update_ok_state()
 
-        splitter.addWidget(right)
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
-        layout.addWidget(splitter, 1)
-        return page
+    def _on_fit_changed(self, fit) -> None:
+        """A new placement (or none). Everything the *section* takes from it.
+
+        The picker deliberately does none of this: it computes a fit and stops.
+        Changing the vertical extent, re-seeding the units and offering the flip
+        are all things that must not happen when an already-drawn section has
+        its backdrop re-linked.
+        """
+        self.mirror_warning.setVisible(fit is not None and fit.is_mirrored)
+        self._sync_extent_source()
+        if fit is not None and self.auto_extent.isChecked():
+            self._extent_from_fit()
+        self._update_ok_state()
 
     def _build_extent_box(self) -> QWidget:
         box = QGroupBox("Top and bottom of the drawing")
@@ -547,12 +467,12 @@ class SectionSetupDialog(QDialog):
     def _on_buffer_changed(self, value: float) -> None:
         self.line.buffer = value
         self.refresh_candidates()
-        self._refresh_gcp_table()
+        self.picker.line_changed()
 
     def _on_flip_changed(self, flipped: bool) -> None:
         self.line.flipped = flipped
         self.refresh_candidates()
-        self.recompute_fit()
+        self.picker.line_changed()
 
     # ------------------------------------------------------------------ SUs --
 
@@ -586,6 +506,16 @@ class SectionSetupDialog(QDialog):
             return None
         path = self.style_edit.text().strip()
         return path or None
+
+    def separation(self) -> float:
+        """The geoid separation the fit was computed with.
+
+        Handed to the session so a saved section can redo its placement later.
+        Without it, control points restored from a file would be refitted with a
+        separation of zero, which on an ellipsoidal survey puts the photo 36 m
+        off -- the same silent error :meth:`_datum_mismatch` warns about.
+        """
+        return float(self.separation_spin.value())
 
     def _refresh_style_note(self) -> None:
         """Say plainly whether the section will come out styled.
@@ -765,160 +695,6 @@ class SectionSetupDialog(QDialog):
         )
         self._update_ok_state()
 
-    # ---------------------------------------------------------------- photo --
-
-    def _browse_photo(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Section photo", "",
-            "Images (*.tif *.tiff *.jpg *.jpeg *.png *.vrt);;All files (*)",
-        )
-        if not path:
-            return
-        try:
-            self._image_size = self.photo_view.load(path)
-        except Exception as exc:
-            QMessageBox.critical(self, "Could not open the photo", str(exc))
-            return
-        self.photo_path = path
-        self.photo_edit.setText(path)
-        self._redraw_markers()
-        self._update_placement_preview()
-        self._update_ok_state()
-
-    def _browse_gcps(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Control points", "", "CSV (*.csv);;All files (*)"
-        )
-        if not path:
-            return
-        try:
-            points, notes = load_emlid_csv(path, transform_lonlat=_lonlat_transformer())
-        except Exception as exc:
-            QMessageBox.critical(self, "Could not read the control points", str(exc))
-            return
-
-        on, off = select_for_section(points, self.line)
-        self.control_points = on
-
-        message = " ".join(notes)
-        if off:
-            message += (
-                f" {len(off)} of {len(points)} points are more than "
-                f"{self.line.buffer:.2f} m off this trace and were left out - "
-                "a day's survey usually covers several walls."
-            )
-        # Recorded before the spin box is touched: setting it re-runs the note.
-        self._gcp_notes = message
-
-        # Only an ellipsoidal file can measure the gap between the datums, and
-        # the gap is worth having either way -- it carries the points across
-        # when the drawing is orthometric, and the SU altitudes across when it
-        # is ellipsoidal.
-        if points and points[0].datum is HeightDatum.ELLIPSOIDAL:
-            guess = suggest_separation(points)
-            if guess:
-                self.separation_spin.setValue(guess)
-
-        self._refresh_datum_note()
-        self._refresh_gcp_table()
-        self._update_ok_state()
-
-    def _refresh_gcp_table(self) -> None:
-        table = self.gcp_table
-        table.blockSignals(True)
-        table.setRowCount(len(self.control_points))
-        sep = self.separation_spin.value()
-        datum = self._working_datum()
-        for row, p in enumerate(self.control_points):
-            check = QTableWidgetItem()
-            check.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
-            check.setCheckState(Qt.Checked if p.enabled else Qt.Unchecked)
-            check.setData(Qt.UserRole, row)
-            table.setItem(row, 0, check)
-            table.setItem(row, 1, QTableWidgetItem(p.name))
-            table.setItem(row, 2, QTableWidgetItem(f"{p.height_in(datum, sep):.3f}"))
-            off = p.offset_from(self.line)
-            off_item = QTableWidgetItem(f"{off*100:+.1f} cm")
-            if abs(off) > self.line.buffer * 0.75:
-                off_item.setForeground(WARN)
-            table.setItem(row, 3, off_item)
-            table.setItem(
-                row, 4,
-                QTableWidgetItem(
-                    f"{p.pixel_x:.0f}, {p.pixel_y:.0f}" if p.is_picked
-                    else "not yet"
-                ),
-            )
-            res = QTableWidgetItem(f"{p.residual*1000:.1f} mm" if p.residual is not None else "")
-            if p.residual is not None:
-                res.setForeground(GOOD if p.residual < 0.02 else WARN if p.residual < 0.05 else BAD)
-            table.setItem(row, 5, res)
-        table.blockSignals(False)
-        self._redraw_markers()
-
-    def _on_gcp_check_changed(self, item) -> None:
-        if item.column() != 0:
-            return
-        idx = item.data(Qt.UserRole)
-        if idx is None or idx >= len(self.control_points):
-            return
-        self.control_points[idx].enabled = item.checkState() == Qt.Checked
-        self.recompute_fit()
-
-    def _on_gcp_selection(self) -> None:
-        rows = self.gcp_table.selectionModel().selectedRows()
-        self._picking_row = rows[0].row() if rows else None
-        self._redraw_markers()
-        if self._picking_row is not None:
-            p = self.control_points[self._picking_row]
-            if p.is_picked:
-                self.photo_view.centre_on_pixel(p.pixel_x, p.pixel_y)
-
-    def _on_pick_toggled(self, on: bool) -> None:
-        self.photo_view.set_picking(on)
-
-    def _on_photo_clicked(self, px: float, py: float) -> None:
-        if self._picking_row is None:
-            QMessageBox.information(
-                self, "Pick a control point",
-                "Select the control point in the table first, then click where "
-                "it sits in the photo.",
-            )
-            return
-        point = self.control_points[self._picking_row]
-        point.pixel_x, point.pixel_y = px, py
-
-        # Advance to the next unpicked row, so a run of points can be clicked
-        # without going back to the table between each.
-        nxt = next(
-            (i for i in range(self._picking_row + 1, len(self.control_points))
-             if not self.control_points[i].is_picked),
-            None,
-        )
-        self._refresh_gcp_table()
-        if nxt is not None:
-            self.gcp_table.selectRow(nxt)
-        self.recompute_fit()
-
-    def _clear_current_pick(self) -> None:
-        if self._picking_row is None:
-            return
-        p = self.control_points[self._picking_row]
-        p.pixel_x = p.pixel_y = None
-        p.residual = None
-        self._refresh_gcp_table()
-        self.recompute_fit()
-
-    def _redraw_markers(self) -> None:
-        if not self.photo_view.is_loaded:
-            return
-        self.photo_view.clear_markers()
-        for i, p in enumerate(self.control_points):
-            if p.is_picked:
-                self.photo_view.set_marker(
-                    p.name, p.pixel_x, p.pixel_y, highlight=(i == self._picking_row)
-                )
-
     # ----------------------------------------------------------- the datum --
 
     def _working_datum(self) -> HeightDatum:
@@ -941,17 +717,16 @@ class SectionSetupDialog(QDialog):
         # CRS -- whose remark states the datum -- and what gets saved.
         self.line.height_datum = self._working_datum().value
         self._refresh_datum_note()
-        self._refresh_gcp_table()
         self._reseed()
-        self.recompute_fit()
+        # Refreshes the point table and refits, both of which read the datum.
+        self.picker.set_datum(self._working_datum(), self.separation_spin.value())
 
     def _on_separation_changed(self, _value: float) -> None:
         self._refresh_datum_note()
-        self._refresh_gcp_table()
         # The SU table's altitudes cross the gap too when the drawing is
         # ellipsoidal, so the seed boxes move with it.
         self._reseed()
-        self.recompute_fit()
+        self.picker.set_datum(self._working_datum(), self.separation_spin.value())
 
     def _datum_mismatch(self) -> str | None:
         """Complaint about heights being used on a datum they are not on.
@@ -1037,93 +812,6 @@ class SectionSetupDialog(QDialog):
             )
         except ValueError as exc:
             QMessageBox.information(self, "Nothing to work out", str(exc))
-
-    def recompute_fit(self) -> None:
-        picked = [p for p in self.control_points if p.enabled and p.is_picked]
-        chosen = self.model_combo.currentData()
-        if not self.photo_view.is_loaded or not picked:
-            self.fit = None
-            self.fit_label.setText("No fit yet - load a photo and pick control points.")
-            self.mirror_warning.setVisible(False)
-            self._sync_extent_source()
-            self._update_placement_preview()
-            self._update_ok_state()
-            return
-
-        model = chosen or best_model_for(len(picked))
-        if len(picked) < model.min_points:
-            self.fit = None
-            self.fit_label.setText(
-                f"{model.label} needs {model.min_points} points; {len(picked)} picked."
-            )
-            self.fit_label.setStyleSheet("color: #c03000;")
-            self._sync_extent_source()
-            self._update_placement_preview()
-            self._update_ok_state()
-            return
-
-        try:
-            self.fit = fit_transform(
-                self.control_points, self.line,
-                separation=self.separation_spin.value(),
-                image_height=self._image_size[1],
-                model=model,
-                datum=self._working_datum(),
-            )
-        except Exception as exc:
-            self.fit = None
-            self.fit_label.setText(str(exc))
-            self.fit_label.setStyleSheet("color: #c03000;")
-            self._sync_extent_source()
-            self._update_placement_preview()
-            self._update_ok_state()
-            return
-
-        exact = len(picked) == model.min_points
-        parts = [
-            f"<b>{model.label}</b> on {len(picked)} points - "
-            f"RMS <b>{self.fit.rms*1000:.1f} mm</b>",
-            f"scale {self.fit.scale*1000:.4f} mm/px, rotation {self.fit.rotation_deg:+.3f} deg",
-        ]
-        if self.fit.worst:
-            parts.append(f"worst: {self.fit.worst[0]} at {self.fit.worst[1]*1000:.1f} mm")
-        if exact:
-            parts.append(
-                "<span style='color:#b06000'>The error reads zero only because "
-                "there are just enough points. Click one more to get a real "
-                "figure.</span>"
-            )
-        if self.fit.is_mirrored:
-            parts.append(
-                "<span style='color:#c03000'><b>The photo is back to front.</b> "
-                "Use the red button at the top to fix it.</span>"
-            )
-        self.fit_label.setText("<br>".join(parts))
-        self.fit_label.setStyleSheet("")
-        self.mirror_warning.setVisible(self.fit.is_mirrored)
-
-        self._refresh_gcp_table()
-        self._sync_extent_source()
-        self._update_placement_preview()
-        if self.auto_extent.isChecked():
-            self._extent_from_fit()
-        self._update_ok_state()
-
-    def _update_placement_preview(self) -> None:
-        """Refresh the placement thumbnail to match the current fit.
-
-        Called from every branch of ``recompute_fit`` and when a photo loads, so
-        the preview is never stale: no fit yet shows the photo upright, and a fit
-        shows it oriented exactly as it will be placed -- mirror included."""
-        if not self.photo_view.is_loaded:
-            self.placed_preview.clear()
-            return
-        self.placed_preview.set_placement(
-            self.photo_view.display_pixmap,
-            self.photo_view.preview_scale,
-            self._image_size[1],
-            self.fit,
-        )
 
     # --------------------------------------------------------------- extent --
 

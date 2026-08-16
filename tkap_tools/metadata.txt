@@ -26,7 +26,7 @@ about=The TKAP QGIS tools. Three tools live under the TKAP Tools
     uncross itself before the polygon is built.
     .
     Licensed GPL-2.0-or-later. See LICENSE in the plugin folder.
-version=1.4.3
+version=1.5.0
 author=Andrew McGallian
 email=andymcgallian@gmail.com
 
@@ -41,7 +41,42 @@ experimental=False
 deprecated=False
 hasProcessingProvider=no
 
-changelog=1.4.3
+changelog=1.5.0
+    - Fix: a saved section lost its photo backdrop. Reopening one that had been
+      saved days earlier showed the drawing on a blank frame, and there was no
+      way to get the photo back short of redrawing the section. The rectified
+      photo was being written to the Windows temp directory and only that path
+      was recorded, so Storage Sense swept it away on its own schedule - and a
+      section opened on any other machine never had it at all. Saving now puts
+      the placed photo beside the section file as <section>_photo.tif and
+      records the path relative to it, so the drawing and its backdrop travel
+      together. Existing sections repair themselves on their next save, as long
+      as the temp file is still there.
+    - Fix: saving a section that had opened without its backdrop wrote an empty
+      photo path over the only record of it, so restoring the photo afterwards
+      no longer helped. Everything known about the placement is now kept on the
+      section whether or not it could be loaded.
+    - Section Drawing: sections record how their photo was placed - the
+      transform, the control points and the geoid separation behind it. Losing
+      the rectified photo is no longer permanent: reopening tries four places in
+      turn, ending with placing the original photograph again by itself, and
+      says which one worked.
+    - Section Drawing: new "Re-link photo..." button under Data sources, beside
+      the SU layer control. Takes either the rectified GeoTIFF, which loads as
+      it stands, or the original photograph, which is placed again from the
+      saved transform. It refuses an image that is not the size the transform
+      was measured against - the transform maps pixels, so a re-cropped copy
+      would put the drawing somewhere on the wall it never was - and offers to
+      pick control points instead. Sections saved before this release have no
+      recorded placement, so for those the button goes straight to picking, with
+      the trace, flip, datum and extent locked because the units are already
+      drawn against them.
+    - Note for anyone running mixed versions: a section saved by 1.5.0 opens
+      fine in an older build, and now finds its backdrop where it previously
+      would not. But saving it from that older build drops the recorded
+      placement, so it can no longer re-place the photo by itself.
+
+    1.4.3
     - Fix: opening a section failed outright with "'SectionSession' object has
       no attribute 'has_polygon_for'". Any section holding at least one unit
       hit it, so 1.4.2 could not open a section at all. Removing the

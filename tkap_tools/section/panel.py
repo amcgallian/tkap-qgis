@@ -263,12 +263,27 @@ class SectionPanel(QDockWidget):
         self.source_note.setStyleSheet("color: grey; font-size: 10px;")
         layout.addWidget(self.source_note)
 
-        # Collapsed by default when the layer is already resolved -- there is
-        # nothing to do here in the normal case. Left open when it is not, so a
-        # reopened section that needs pointing says so where the fix is.
-        box.setCollapsed(self.source_layer is not None)
+        relink = QPushButton("Re-link photo...")
+        relink.setToolTip(
+            "Point the section at its backdrop photo again, when it has moved "
+            "or gone missing."
+        )
+        relink.clicked.connect(self._relink_photo)
+        layout.addWidget(relink)
+
+        self.photo_note = QLabel()
+        self.photo_note.setWordWrap(True)
+        layout.addWidget(self.photo_note)
+
+        # Collapsed by default when there is nothing to do here -- which now
+        # means both the SU layer and the backdrop resolved. Left open when
+        # either did not, so a reopened section says so where the fix is.
+        box.setCollapsed(
+            self.source_layer is not None and self.session.photo_layer is not None
+        )
         self._sources_box = box
         self._sync_source_widgets()
+        self._sync_photo_widgets()
         return box
 
     def _sync_source_widgets(self) -> None:
@@ -300,6 +315,51 @@ class SectionPanel(QDockWidget):
         self._sync_source_widgets()
         # The plugin holds its own reference for export; keep it in step.
         self.sourceLayerChanged.emit(layer)
+
+    # There is deliberately no photoChanged signal to match sourceLayerChanged.
+    # That one exists only because the plugin keeps its own copy of the SU layer
+    # for export; nothing keeps a second copy of the photo -- saving and the
+    # figure both read session.photo_layer directly -- so a signal would have no
+    # subscriber with anything to do.
+
+    def refresh_photo_status(self) -> None:
+        """Re-read the backdrop's state. Called after a save relocates it."""
+        self._sync_photo_widgets()
+
+    def _sync_photo_widgets(self) -> None:
+        """Say plainly whether this section still has its backdrop.
+
+        Worth stating rather than leaving to be noticed: a missing backdrop is
+        invisible until an export comes out bare, and the difference between
+        "re-link it" and "pick control points again" decides how much work
+        getting it back is going to be.
+        """
+        from pathlib import Path
+
+        session = self.session
+        if session.photo_layer is not None:
+            name = Path(session.photo_placed or "").name
+            colour = GOOD
+            text = f"Backdrop: {name}." if name else "Backdrop loaded."
+        elif session.photo_fit is not None and session.photo_source:
+            colour = BAD
+            text = (
+                f"The backdrop is missing. It was placed from "
+                f"{Path(session.photo_source).name}, and Re-link photo... can "
+                "put it straight back."
+            )
+        elif session.photo_source or session.photo_placed:
+            colour = WARN
+            text = (
+                "The backdrop is missing, and this section was saved before "
+                "placements were recorded - re-linking it means picking control "
+                "points again."
+            )
+        else:
+            colour = NEUTRAL
+            text = "No backdrop - this section is drawn on a blank frame."
+        self.photo_note.setText(text)
+        self.photo_note.setStyleSheet(f"color: {colour.name()}; font-size: 10px;")
 
     def _build_frame_box(self) -> QWidget:
         """The drawing surface's extent, which is exactly what gets exported.
@@ -752,6 +812,164 @@ class SectionPanel(QDockWidget):
                 "plain fill.\n\nApply the project's style to the SU layer, or "
                 "point this at the .qml directly.",
             )
+
+    def _relink_photo(self) -> None:
+        """Point the section at its backdrop again.
+
+        Takes either the already-rectified raster, which is loaded as it stands,
+        or the original photograph, which is put back through the placement
+        saved with the section. Only a section saved before placements were
+        recorded has to have its control points picked again.
+        """
+        from pathlib import Path
+
+        from qgis.PyQt.QtWidgets import QApplication, QFileDialog
+
+        from .gcp_picker import PHOTO_FILTER
+        from .session import looks_placed
+
+        session = self.session
+        # No QSettings key here, unlike the .qml: one style file serves every
+        # section on the machine, but a photo belongs to exactly one section, so
+        # the useful starting point is that section's own neighbourhood.
+        start = ""
+        for candidate in (session.photo_source, session.saved_to):
+            if candidate and Path(candidate).parent.is_dir():
+                start = str(Path(candidate).parent)
+                break
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "The section's backdrop photo", start, PHOTO_FILTER
+        )
+        if not path:
+            return
+
+        # Already in section space: load it as it is, and leave the recorded
+        # placement alone -- it still describes this raster correctly.
+        if looks_placed(path, session):
+            try:
+                session.reload_placed_photo(path)
+            except Exception as exc:
+                QMessageBox.critical(self, "Could not load the photo", str(exc))
+                return
+            self._after_relink(f"Backdrop re-linked to {Path(path).name}.")
+            return
+
+        if session.photo_fit is None:
+            # Saved before placements were recorded, so there is nothing to put
+            # it back with but the user's own eyes.
+            self._repick_photo(path)
+            return
+
+        verdict = self._check_dimensions(path)
+        if verdict == "stop":
+            return
+        if verdict == "repick":
+            self._repick_photo(path)
+            return
+
+        try:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                session.attach_photo(
+                    path, session.photo_fit,
+                    points=session.photo_points,
+                    separation=session.photo_separation,
+                )
+            finally:
+                QApplication.restoreOverrideCursor()
+        except Exception as exc:
+            QMessageBox.critical(self, "Could not place the photo", str(exc))
+            return
+        self._after_relink(f"Backdrop re-placed from {Path(path).name}.")
+
+    def _check_dimensions(self, path: str) -> str:
+        """Is ``path`` the size the saved placement was measured on?
+
+        Returns "ok", "repick" or "stop". The placement maps *pixels*, so
+        handing it a re-cropped or resized copy of the same photograph puts the
+        drawing somewhere on the wall it never was -- and does it without
+        looking wrong, which is why a mismatch refuses rather than warns. The
+        refusal is a fork rather than a dead end: picking control points again
+        works on any image, whatever its size.
+        """
+        from pathlib import Path
+
+        fit = self.session.photo_fit
+        if not fit.image_width:
+            return "ok"                 # saved before the width was recorded
+
+        try:
+            from osgeo import gdal
+
+            gdal.UseExceptions()
+            ds = gdal.Open(str(path))
+            size = (ds.RasterXSize, ds.RasterYSize)
+        except Exception as exc:
+            QMessageBox.critical(self, "Could not read the photo", str(exc))
+            return "stop"
+
+        if size == (fit.image_width, fit.image_height):
+            return "ok"
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("That is not the same photo")
+        box.setText(
+            f"The section was placed against an image "
+            f"{fit.image_width} x {fit.image_height} pixels, but "
+            f"{Path(path).name} is {size[0]} x {size[1]}.\n\nThe saved "
+            "placement is measured in pixels, so using it on this image would "
+            "put the drawing somewhere on the wall it never was."
+        )
+        repick = box.addButton("Pick control points...", QMessageBox.AcceptRole)
+        box.addButton("Cancel", QMessageBox.RejectRole)
+        box.exec_()
+        return "repick" if box.clickedButton() is repick else "stop"
+
+    def _repick_photo(self, path: str = "") -> None:
+        """Place a photo by picking control points on it again.
+
+        The way back for a section saved before placements were recorded, and
+        for one being pointed at a different copy of its photograph.
+        """
+        from pathlib import Path
+
+        from qgis.PyQt.QtWidgets import QApplication
+
+        from .gcp_picker import RelinkPhotoDialog
+
+        dialog = RelinkPhotoDialog(self.session, initial_path=path, parent=self)
+        if not dialog.exec_():
+            return
+        fit, photo = dialog.result_fit(), dialog.result_photo()
+        if fit is None or not photo:
+            return
+
+        try:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                self.session.attach_photo(
+                    photo, fit,
+                    points=dialog.result_points(),
+                    separation=self.session.photo_separation,
+                )
+            finally:
+                QApplication.restoreOverrideCursor()
+        except Exception as exc:
+            QMessageBox.critical(self, "Could not place the photo", str(exc))
+            return
+        self._after_relink(f"Backdrop placed from {Path(photo).name}.")
+
+    def _after_relink(self, message: str) -> None:
+        from qgis.core import Qgis
+
+        self._sync_photo_widgets()
+        self.iface.messageBar().pushMessage(
+            "TKAP Section",
+            f"{message} Save the section to record where it is.",
+            level=Qgis.Info, duration=8,
+        )
 
     # ---------------------------------------------------------------- adding --
 

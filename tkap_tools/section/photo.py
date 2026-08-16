@@ -314,6 +314,12 @@ class Fit:
     rms: float = 0.0
     worst: tuple[str, float] | None = None
     image_height: int = 0
+    #: Width of the image this was measured against. Carried purely so a photo
+    #: being re-linked to a saved section can be checked against it: the matrix
+    #: maps *pixels*, so applying it to a re-cropped or resized copy of the same
+    #: photograph places the drawing somewhere it never was, and does so without
+    #: looking wrong. Zero means "not recorded" (a fit from an older save).
+    image_width: int = 0
 
     @property
     def scale(self) -> float:
@@ -483,6 +489,7 @@ def fit_transform(
     *,
     separation: float,
     image_height: int,
+    image_width: int = 0,
     model: FitModel | None = None,
     datum: HeightDatum = DEFAULT_WORKING_DATUM,
 ) -> Fit:
@@ -510,7 +517,10 @@ def fit_transform(
     )
     matrix = _FITTERS[chosen](src, dst)
 
-    fit = Fit(model=chosen, matrix=matrix, image_height=image_height)
+    fit = Fit(
+        model=chosen, matrix=matrix,
+        image_height=image_height, image_width=image_width,
+    )
     total = 0.0
     for p, (px, py) in zip(usable, src):
         want = np.array(p.section_xy(line, separation, datum))
@@ -611,3 +621,113 @@ def write_placed_raster(
     tmp = None
     src = None
     return out_path
+
+
+# ----------------------------------------------------------- serialisation --
+#
+# A placement used to be thrown away the moment it had been applied, which made
+# a section that lost its rectified photo unrecoverable: the original image was
+# still on disk and still correct, but nothing remembered how it had been put
+# into section space, so the only way back was to pick every control point
+# again. These turn a placement into something a saved section can carry.
+#
+# It lives here rather than in ``store`` because this module owns Fit, FitModel,
+# ControlPoint, HeightDatum and numpy, and deliberately knows nothing about
+# GeoPackages, GDAL or QGIS.
+
+
+def fit_to_dict(fit: Fit) -> dict:
+    """A fit as plain JSON-safe types.
+
+    Residuals are left out on purpose: they are display-only and are recomputed
+    from the points whenever the fit is redone, so storing them would just be a
+    second copy to fall out of step with the first.
+    """
+    return {
+        # ``.name``, never ``.value`` -- FitModel's value is a (label, min_points)
+        # tuple, and the label is prose that may well be reworded.
+        "model": fit.model.name,
+        "matrix": [[float(v) for v in row] for row in fit.matrix],
+        "image_width": int(fit.image_width),
+        "image_height": int(fit.image_height),
+        "rms": float(fit.rms),
+    }
+
+
+def fit_from_dict(data: dict | None) -> Fit | None:
+    """Rebuild a fit, or None if the record is unusable.
+
+    Tolerant by design. A section whose placement cannot be read is no worse off
+    than one saved before placements were recorded at all -- it falls back to
+    picking control points -- whereas raising here would stop the drawing itself
+    from opening.
+    """
+    if not isinstance(data, dict):
+        return None
+    try:
+        model = FitModel[str(data["model"])]
+        # dtype is not optional: an all-integer matrix comes back as int64 and
+        # geotransform() would then hand GDAL integer pixel sizes.
+        matrix = np.array(data["matrix"], dtype=float)
+        if matrix.shape != (3, 3):
+            return None
+        return Fit(
+            model=model,
+            matrix=matrix,
+            rms=float(data.get("rms") or 0.0),
+            image_height=int(data.get("image_height") or 0),
+            image_width=int(data.get("image_width") or 0),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def points_to_list(points: list[ControlPoint]) -> list[dict]:
+    """Control points as plain JSON-safe types.
+
+    Every point is kept, not just the picked and enabled ones, so that re-opening
+    a section shows the same table the user last worked with -- including the
+    ones they deliberately unticked, which is a decision worth preserving.
+    """
+    rows = []
+    for p in points:
+        rows.append({
+            "name": str(p.name),
+            "easting": float(p.easting),
+            "northing": float(p.northing),
+            "height": float(p.height),
+            "datum": p.datum.value,
+            "pixel_x": None if p.pixel_x is None else float(p.pixel_x),
+            "pixel_y": None if p.pixel_y is None else float(p.pixel_y),
+            "enabled": bool(p.enabled),
+        })
+    return rows
+
+
+def points_from_list(rows: list | None) -> list[ControlPoint]:
+    """Rebuild control points, skipping any row that cannot be read.
+
+    A dropped point costs one row in the table; refusing the whole list because
+    of one bad row would cost the user every pick they made.
+    """
+    if not isinstance(rows, list):
+        return []
+    points: list[ControlPoint] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            px, py = row.get("pixel_x"), row.get("pixel_y")
+            points.append(ControlPoint(
+                name=str(row["name"]),
+                easting=float(row["easting"]),
+                northing=float(row["northing"]),
+                height=float(row["height"]),
+                datum=HeightDatum(row.get("datum") or DEFAULT_WORKING_DATUM.value),
+                pixel_x=None if px is None else float(px),
+                pixel_y=None if py is None else float(py),
+                enabled=bool(row.get("enabled", True)),
+            ))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return points

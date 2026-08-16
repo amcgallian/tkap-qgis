@@ -16,7 +16,12 @@ from pathlib import Path
 from qgis.core import Qgis, QgsMessageLog, QgsProject
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QIcon
-from qgis.PyQt.QtWidgets import QAction, QFileDialog, QMessageBox
+from qgis.PyQt.QtWidgets import (
+    QAction,
+    QApplication,
+    QFileDialog,
+    QMessageBox,
+)
 
 from .export_dialog import ExportDialog
 from .figure import DIGITIZED, KIND_LABELS, WIREFRAME, export_figure
@@ -25,6 +30,7 @@ from .section_geom import SectionLine
 from .session import SectionSession
 from .setup_dialog import SectionSetupDialog
 from .store import (
+    find_photo,
     find_source_layer,
     line_from_metadata,
     load_polygons,
@@ -159,7 +165,14 @@ class TkapSectionPlugin:
 
         if dialog.photo_path and dialog.fit is not None:
             try:
-                session.attach_photo(dialog.photo_path, dialog.fit)
+                # The points and the separation are handed over with the fit so
+                # the placement can be redone later without the user picking
+                # every control point again.
+                session.attach_photo(
+                    dialog.photo_path, dialog.fit,
+                    points=dialog.control_points,
+                    separation=dialog.separation(),
+                )
             except Exception as exc:
                 self._log(f"Photo placement failed: {exc}")
                 self.iface.messageBar().pushMessage(
@@ -262,7 +275,14 @@ class TkapSectionPlugin:
             return
         title = self.panel.title_edit.text() if self.panel else ""
         try:
-            written = save_session(self.session, path, title=title)
+            # Saving now copies the backdrop next to the section file, which on
+            # a big ortho over a share is several seconds of apparently nothing
+            # happening.
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                written = save_session(self.session, path, title=title)
+            finally:
+                QApplication.restoreOverrideCursor()
         except Exception as exc:
             self._log(f"Save failed: {exc}")
             QMessageBox.critical(
@@ -270,6 +290,10 @@ class TkapSectionPlugin:
             )
             return
         self.session.saved_to = str(written)
+        if self.panel is not None:
+            # The backdrop has just moved next to the section file, so what the
+            # panel says about it is now out of date.
+            self.panel.refresh_photo_status()
         self.iface.messageBar().pushMessage(
             PLUGIN_NAME, f"Section saved to {written}",
             level=Qgis.Success, duration=8,
@@ -333,21 +357,7 @@ class TkapSectionPlugin:
         self.session = session
         session.saved_to = str(path)
 
-        # The placed raster is referenced, not stored, so a moved or offline
-        # share costs the backdrop but not the drawing.
-        placed = meta.get("photo_placed") or ""
-        if placed and Path(placed).exists():
-            try:
-                session.reload_placed_photo(placed)
-            except Exception as exc:
-                self._log(f"Could not reload the photo: {exc}")
-        elif placed:
-            self.iface.messageBar().pushMessage(
-                PLUGIN_NAME,
-                f"The rectified photo is no longer at {placed}; the drawing "
-                "opened without it.",
-                level=Qgis.Warning, duration=10,
-            )
+        self._restore_photo(session, meta, path)
 
         session.candidates = candidates_from_features(features)
         restored = session.restore_polygons(features, fields)
@@ -378,6 +388,73 @@ class TkapSectionPlugin:
             f"Reopened {Path(path).name} - {restored} polygons across "
             f"{len(session.candidates)} SUs.",
             level=Qgis.Success, duration=8,
+        )
+
+    def _restore_photo(self, session, meta: dict, path: str) -> None:
+        """Get a reopened section's backdrop back, and say how it went.
+
+        Everything known about the placement goes onto the session first,
+        whether or not any of it can be loaded. That ordering is the point: the
+        old code only recorded a backdrop it had managed to open, so reopening a
+        section whose photo had gone and then saving wrote an empty path over
+        the only record of it -- turning a section that merely needed re-linking
+        into one that had to be redrawn.
+        """
+        res = find_photo(meta, path)
+        session.photo_source = res.source
+        session.photo_placed = res.placed or (meta.get("photo_placed") or "")
+        session.photo_fit = res.fit
+        session.photo_points = res.points
+        session.photo_separation = res.separation
+
+        if res.placed:
+            try:
+                session.reload_placed_photo(res.placed)
+                if res.how != "beside the section file":
+                    # The ordinary case says nothing; anything else is worth
+                    # naming, because the file the user gets is not the one the
+                    # section nominally points at until they save again.
+                    self.iface.messageBar().pushMessage(
+                        PLUGIN_NAME,
+                        f"Backdrop recovered - {res.how}. Save the section to "
+                        "record where it is.",
+                        level=Qgis.Info, duration=10,
+                    )
+                return
+            except Exception as exc:
+                # Fall through rather than give up. A truncated or half-copied
+                # raster used to mask a perfectly good re-placement.
+                self._log(f"Could not load the placed photo {res.placed}: {exc}")
+
+        if res.can_replace:
+            try:
+                QApplication.setOverrideCursor(Qt.WaitCursor)
+                try:
+                    session.attach_photo(
+                        res.source, res.fit,
+                        points=res.points, separation=res.separation,
+                    )
+                finally:
+                    QApplication.restoreOverrideCursor()
+                self.iface.messageBar().pushMessage(
+                    PLUGIN_NAME,
+                    f"Backdrop {res.how}. Save the section to record where it is.",
+                    level=Qgis.Info, duration=10,
+                )
+                return
+            except Exception as exc:
+                self._log(f"Could not re-place the photo: {exc}")
+
+        if not (session.photo_placed or session.photo_source):
+            return                              # never had one; nothing to report
+
+        fix = ("Use Re-link photo... under Data sources to point it at the image "
+               "again." if res.fit is not None else
+               "Use Re-link photo... under Data sources to pick control points "
+               "again.")
+        self.iface.messageBar().pushMessage(
+            PLUGIN_NAME, f"{res.how[:1].upper()}{res.how[1:]}. {fix}",
+            level=Qgis.Warning, duration=12,
         )
 
     # --------------------------------------------------------------- output --

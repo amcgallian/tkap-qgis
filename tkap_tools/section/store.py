@@ -12,10 +12,14 @@ The geometry is stored in the section's own CRS, so the file opens sensibly in
 plain QGIS without the plugin -- x is chainage, y is elevation, and the CRS
 remark says how to get back to real-world coordinates.
 
-The photo is *referenced*, not embedded. A placed ortho is tens of megabytes and
-usually lives on the share; copying it into every section file would make the
-sections unwieldy for no gain. If it has moved by the time a section is
-reopened, the drawing still loads -- just without its backdrop.
+The photo is *referenced*, not embedded: a placed ortho is tens of megabytes, and
+folding one into every section file would make the sections unwieldy for no gain.
+But it is referenced from right next to the section file, not from wherever it
+happened to be warped -- the drawing and the photograph it was traced over are
+one thing to the person who made them, so they are kept as one thing on disk and
+travel together. On top of that the *placement itself* is recorded, so a backdrop
+that does go missing can be rebuilt from the original photograph rather than
+costing the user every control point they picked. See :func:`find_photo`.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from qgis.core import (
@@ -47,6 +52,16 @@ META_TABLE = "section_meta"
 
 #: Bumped when the metadata layout changes in a way older files cannot satisfy.
 FORMAT_VERSION = 1
+
+
+def placed_photo_name(gpkg_path: str | Path) -> str:
+    """What a section file calls the placed backdrop it keeps beside itself.
+
+    Derived from the section file's own name rather than the photo's, so a
+    section that has lost its metadata -- or been handed over as a bare pair of
+    files -- can still be reunited with its backdrop by name alone.
+    """
+    return f"{Path(gpkg_path).stem}_photo.tif"
 
 
 class SectionStoreError(RuntimeError):
@@ -109,6 +124,10 @@ def save_session(session, path: str | Path, *, title: str = "") -> Path:
     line = session.line
     ctx = QgsCoordinateTransformContext()
 
+    # Before anything is written, get the backdrop next to the file that refers
+    # to it, so the pair can be copied to a share or another machine together.
+    placed_abs, placed_rel = _photo_beside(session, path)
+
     def write(layer, name, first):
         options = QgsVectorFileWriter.SaveVectorOptions()
         options.driverName = "GPKG"
@@ -150,12 +169,15 @@ def save_session(session, path: str | Path, *, title: str = "") -> Path:
     feat["buffer"] = float(line.buffer)
     feat["flipped"] = 1 if line.flipped else 0
     feat["photo_path"] = getattr(session, "photo_source", "") or ""
-    feat["photo_placed"] = (
-        session.photo_layer.source() if session.photo_layer is not None else ""
-    )
+    # Read from the session, never from the layer. Taking it off the layer meant
+    # that reopening a section whose backdrop had gone -- so there was no layer
+    # -- and then saving wrote an empty path over the only record of it, which
+    # made a recoverable section permanently unrecoverable. Absolute on purpose:
+    # this is also the only field an older build of the plugin reads.
+    feat["photo_placed"] = placed_abs
     feat["style_qml"] = session.style_qml or ""
     source = getattr(session, "source_layer", None)
-    feat["extra_json"] = json.dumps({
+    extra = {
         # Which vertical datum the drawing's heights are on. A label rather than
         # a conversion -- the geometry is already on it -- but reopening without
         # it would state the wrong datum in the section CRS.
@@ -182,7 +204,19 @@ def save_session(session, path: str | Path, *, title: str = "") -> Path:
             }
             for c in session.candidates
         ],
-    })
+    }
+
+    # How the backdrop was placed. Recorded because the placement used to be
+    # thrown away the instant it had been applied, so a section that lost its
+    # rectified photo could only be recovered by picking every control point
+    # again -- even though the original photograph was usually still on disk and
+    # still correct. Written whenever there is a placement to describe, whether
+    # or not the layer is currently loaded.
+    photo = _photo_block(session, placed_abs, placed_rel)
+    if photo:
+        extra["photo"] = photo
+
+    feat["extra_json"] = json.dumps(extra)
     # A point at the middle of the section, purely so the row has a geometry and
     # the table shows up as a layer rather than an aspatial table.
     feat.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(
@@ -211,7 +245,93 @@ def save_session(session, path: str | Path, *, title: str = "") -> Path:
                 f"{path.name} was written but cannot be read back - the save "
                 "did not complete."
             )
+
+    # Only now that the file is known good, move the live layer onto the copy
+    # beside it. Doing it earlier would leave a session pointing at the backdrop
+    # for a section that turned out not to have been written. Without it the
+    # layer stays on the scratch copy for the rest of the session and every
+    # later save re-copies the whole ortho.
+    if (session.photo_layer is not None and placed_abs
+            and session.photo_layer.source() != placed_abs):
+        try:
+            session.reload_placed_photo(placed_abs)
+        except Exception:
+            # The saved file is correct either way; this is only about which
+            # copy is on screen.
+            pass
+
     return path
+
+
+def _photo_beside(session, gpkg: Path) -> tuple[str, str]:
+    """Put the placed backdrop next to ``gpkg``. Returns (absolute, relative).
+
+    The drawing and the photograph it was traced over are one thing to the
+    person who made them, so they are kept as one thing on disk. Previously the
+    placed raster stayed in the temp directory it was warped into and only its
+    path was recorded, which meant Windows swept it away days later and no other
+    machine could ever see it.
+
+    Best effort throughout: a section that saves without its backdrop is a bad
+    day, and a section that fails to save is a lost one.
+    """
+    layer = getattr(session, "photo_layer", None)
+    placed = layer.source() if layer is not None else ""
+    # Falling back to the recorded path is what lets a section that reopened
+    # without its backdrop still be saved without losing track of it.
+    placed = placed or (getattr(session, "photo_placed", "") or "")
+    if not placed or not Path(placed).is_file():
+        return placed, ""
+
+    dest = gpkg.parent / placed_photo_name(gpkg)
+    if Path(placed) == dest:
+        return str(dest), dest.name          # already here; every save after the first
+
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(placed, dest)
+        # Statistics and overviews are regenerable, but copying them spares the
+        # user a recompute the first time the section is opened elsewhere.
+        for suffix in (".aux.xml", ".ovr"):
+            side = Path(str(placed) + suffix)
+            if side.exists():
+                try:
+                    shutil.copy2(side, Path(str(dest) + suffix))
+                except OSError:
+                    pass
+    except OSError:
+        return placed, ""
+
+    return str(dest), dest.name
+
+
+def _photo_block(session, placed_abs: str, placed_rel: str) -> dict:
+    """The ``extra_json`` record of how the backdrop was placed, or {}."""
+    from .photo import fit_to_dict, points_to_list
+
+    fit = getattr(session, "photo_fit", None)
+    source = getattr(session, "photo_source", "") or ""
+    if not source and fit is None and not placed_abs:
+        return {}
+
+    block = {
+        "source": source,
+        # Relative first, so the pair can be copied anywhere together. Stored
+        # POSIX-style because a backslash is an ordinary filename character on
+        # anything but Windows.
+        "placed": Path(placed_rel).as_posix() if placed_rel else "",
+        "placed_abs": placed_abs,
+        "separation": float(getattr(session, "photo_separation", 0.0) or 0.0),
+        # Deliberately duplicates extra["height_datum"]: that one is what the
+        # drawing is on, this one is what the fit was actually computed with, and
+        # holding both is what lets a later reader notice they disagree instead
+        # of assuming they do not.
+        "datum": session.line.height_datum,
+    }
+    if fit is not None:
+        block["fit"] = fit_to_dict(fit)
+        block["points"] = points_to_list(getattr(session, "photo_points", []) or [])
+    return block
 
 
 class _readable_copy:
@@ -347,6 +467,92 @@ def find_source_layer(meta: dict):
             return None, f"more than one layer is called '{name}'"
 
     return None, f"'{name or 'the SU layer'}' is not loaded in this project"
+
+
+@dataclass
+class PhotoResolution:
+    """How a saved section's backdrop can be got back, and how sure we are."""
+
+    #: An existing placed raster to load as it stands.
+    placed: str = ""
+    #: The original photograph, when the placement has to be redone.
+    source: str = ""
+    fit: object = None
+    points: list = field(default_factory=list)
+    separation: float = 0.0
+    #: Plain English, for the message bar.
+    how: str = ""
+
+    @property
+    def can_replace(self) -> bool:
+        """Whether the backdrop can be rebuilt from the original photograph."""
+        return self.fit is not None and bool(self.source) and Path(self.source).is_file()
+
+
+def find_photo(meta: dict, gpkg_path: str | Path) -> PhotoResolution:
+    """Where a saved section's backdrop can be found now.
+
+    The same shape of problem as :func:`find_source_layer`, and answered the same
+    way: several candidates tried in falling order of how much each one proves,
+    and a ``how`` string so the user is told which one worked rather than being
+    left to wonder why the drawing looks different.
+
+    Candidates, in order: the copy beside the section file; the path it was saved
+    from; a backdrop named after the section file sitting beside it; and finally
+    the original photograph plus the saved placement, which costs a re-warp but
+    needs nothing to have stayed where it was.
+
+    This only *finds*. Re-warping is the caller's business, because it is slow
+    and wants a wait cursor around it.
+    """
+    from .photo import fit_from_dict, points_from_list
+
+    gpkg = Path(gpkg_path)
+    saved = (meta.get("extra") or {}).get("photo") or {}
+
+    res = PhotoResolution(
+        source=saved.get("source") or (meta.get("photo_path") or ""),
+        fit=fit_from_dict(saved.get("fit")),
+        points=points_from_list(saved.get("points")),
+        separation=float(saved.get("separation") or 0.0),
+    )
+
+    relative = saved.get("placed") or ""
+    if relative:
+        beside = gpkg.parent / relative
+        if beside.is_file():
+            res.placed, res.how = str(beside), "beside the section file"
+            return res
+
+    recorded = saved.get("placed_abs") or (meta.get("photo_placed") or "")
+    if recorded and Path(recorded).is_file():
+        res.placed, res.how = recorded, "at the path it was saved from"
+        return res
+
+    # A section file and its backdrop that were copied somewhere together, where
+    # the metadata predates the relative path being recorded.
+    by_name = gpkg.parent / placed_photo_name(gpkg)
+    if by_name.is_file():
+        res.placed, res.how = str(by_name), f"as {by_name.name}, beside the section file"
+        return res
+
+    if res.can_replace:
+        res.how = (
+            f"re-placed from {Path(res.source).name} using the control points "
+            "saved with the section"
+        )
+        return res
+
+    if not (recorded or relative or res.source):
+        res.how = "this section was drawn without a photo"
+    elif res.source:
+        res.how = (
+            f"the rectified photo is not beside {gpkg.name}, and "
+            f"{Path(res.source).name} is no longer where it was"
+        )
+    else:
+        res.how = f"the rectified photo is not beside {gpkg.name}"
+    return res
 
 
 def line_from_metadata(meta: dict) -> SectionLine:
