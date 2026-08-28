@@ -26,7 +26,7 @@ about=The TKAP QGIS tools. Three tools live under the TKAP Tools
     uncross itself before the polygon is built.
     .
     Licensed GPL-2.0-or-later. See LICENSE in the plugin folder.
-version=1.6.1
+version=1.6.2
 author=Andrew McGallian
 email=andymcgallian@gmail.com
 
@@ -41,7 +41,29 @@ experimental=False
 deprecated=False
 hasProcessingProvider=no
 
-changelog=1.6.1
+changelog=1.6.2
+    - Plans from a Plan File: spaces. Pick a Spaces layer and the column holding
+      the space number, and every plan gets a third layer alongside its SUs and
+      features. The query is usually not written at all: an SU query filtering
+      on Sp.110.1 has already said its plan is about space 110, so the spaces
+      are read back out of it and become "space" IN ('110', '111'). On the Field
+      3 file that gives 15 of the 16 plans a space layer with nothing new to
+      write; 3.1 is a bare sunumber list, names no space, and correctly gets
+      none. A ...SpacesPlan: block overrides the derived query where a plan
+      needs something else.
+    - Spaces are drawn above everything - space outlines read over the whole
+      plan - and are kept out of the legend, which is what they are wanted for:
+      context on the map, not an entry in the key. The export puts each plan's
+      space layer straight into the map frame and leaves it unchecked in the
+      layer tree, so an auto-updating legend never picks it up. That needs "Set
+      map layers per phase", which is on by default; with it off the dialog says
+      the spaces will appear in the legend.
+    - Export Phase Plans takes two companion groups now rather than one, in draw
+      order: Spaces, then Features, then the SUs. Both are matched to their plan
+      by name exactly as before.
+    - New {spaces} title placeholder, rendering as "109, 61, 118".
+
+    1.6.1
     - Phasing: new "Plans from a Plan File..." action. Split by Phase derives the
       plans from space_phase, which stops being the right answer as soon as a
       publication plan is a hand-picked set - a space-phase minus six SUs, or

@@ -1,4 +1,4 @@
-"""Turn a parsed plan file into one pair of live filtered layers per plan.
+"""Turn a parsed plan file into a set of layers per plan.
 
 The split tool derives its layers from the data; this derives them from the plan
 file. Both end up in the same place -- a group of layers, one per plan -- which
@@ -6,14 +6,16 @@ is what lets *Export Phase Plans* walk either without knowing where the queries
 came from. A plan is either an editable copy of the features its query selects
 or a live filtered view of them; see ``MODE_COPY`` / ``MODE_LIVE``.
 
-Each plan produces up to two layers, both carrying the plan's name so the
-export dialog's existing companion matching pairs them:
+Each plan produces up to three layers, all carrying the plan's name so the
+export dialog's companion matching pairs them. They are grouped in draw order,
+topmost first:
 
+    Spaces group    3.1 Hellenistic Pitting and Abandonment   (Spaces layer)
     Features group  3.1 Hellenistic Pitting and Abandonment   (Features layer)
     Plans group     3.1 Hellenistic Pitting and Abandonment   (SU layer)
 
-The Features group is put above the Plans group, in that order, because a
-feature is recorded *in* the SUs around it and has to draw on top of them.
+Space outlines read over the whole plan, and a feature is recorded *in* the SUs
+around it, so both sit above the stratigraphy rather than under it.
 """
 
 from __future__ import annotations
@@ -24,9 +26,10 @@ from typing import Callable, Dict, List, Optional
 from .phasing_core import build_memory_layer, build_query_layer, combine_filters
 from .plan_file import PlanFile, PlanMap, layer_properties
 
-#: Suffixes for the two output groups, appended to the plan file's stem.
+#: Suffixes for the output groups, appended to the plan file's stem.
 GROUP_SUFFIX_PLANS = "Plans"
 GROUP_SUFFIX_FEATURES = "Features"
+GROUP_SUFFIX_SPACES = "Spaces"
 
 #: What a plan layer *is*, which decides where an edit to one goes.
 #:
@@ -51,27 +54,50 @@ class PlanCheck:
     layer_name: str = ""
     su_count: Optional[int] = None
     feature_count: Optional[int] = None
+    space_count: Optional[int] = None
     su_error: str = ""
     feature_error: str = ""
+    space_error: str = ""
+    #: The query actually run against the Spaces layer -- often derived from the
+    #: SU query rather than written, so it is worth being able to show.
+    space_query: str = ""
     #: Held between the check and the build so the layers are made once. The
     #: check has to instantiate them to count honestly -- a provider filter is
     #: SQL, and only the provider can say what it returns.
     su_layer: object = None
     feature_layer: object = None
+    space_layer: object = None
+
+    @property
+    def errors(self) -> List[str]:
+        return [
+            message
+            for message in (self.su_error, self.feature_error, self.space_error)
+            if message
+        ]
 
     @property
     def ok(self) -> bool:
-        return not (self.su_error or self.feature_error)
+        return not self.errors
 
     @property
     def empty(self) -> bool:
         """True when the plan draws nothing at all -- usually a typo'd SU list."""
-        return not (self.su_count or self.feature_count)
+        return not (self.su_count or self.feature_count or self.space_count)
+
+    @property
+    def layers(self) -> List:
+        """Every layer built for this plan, in draw order, topmost first."""
+        return [
+            layer
+            for layer in (self.space_layer, self.feature_layer, self.su_layer)
+            if layer is not None
+        ]
 
     def status(self) -> str:
         """One line for the pre-flight table."""
-        if self.su_error or self.feature_error:
-            return "; ".join(p for p in (self.su_error, self.feature_error) if p)
+        if self.errors:
+            return "; ".join(self.errors)
         if self.empty:
             return "matches nothing"
         return "ok"
@@ -83,6 +109,7 @@ class PlanSetOutcome:
     errors: List[str] = dc_field(default_factory=list)
     plans_group: str = ""
     features_group: str = ""
+    spaces_group: str = ""
     #: layer name -> the editable subsetString applied.
     subsets: Dict[str, str] = dc_field(default_factory=dict)
 
@@ -92,7 +119,8 @@ class PlanSetOutcome:
 
     @property
     def built(self) -> List[PlanCheck]:
-        return [check for check in self.checks if check.su_layer is not None]
+        """Checks that produced at least one layer, whichever layer that is."""
+        return [check for check in self.checks if check.layers]
 
 
 def unique_layer_names(plans: List[PlanMap]) -> Dict[int, str]:
@@ -182,6 +210,8 @@ def check_plans(
     plan_file: PlanFile,
     su_layer,
     feature_layer=None,
+    space_layer=None,
+    space_field: str = "space",
     inherit_style: bool = True,
     mode: str = MODE_COPY,
     progress: Optional[Callable[[int, int, str], None]] = None,
@@ -197,8 +227,10 @@ def check_plans(
     """
     outcome = PlanSetOutcome()
     plans = plan_file.usable
-    if su_layer is None and feature_layer is None:
-        outcome.errors.append("Choose an SU layer, a Features layer, or both.")
+    if su_layer is None and feature_layer is None and space_layer is None:
+        outcome.errors.append(
+            "Choose at least one of the SU, Features and Spaces layers."
+        )
         return outcome
 
     names = unique_layer_names(plans)
@@ -211,10 +243,14 @@ def check_plans(
 
         check = PlanCheck(plan=plan, layer_name=name)
         properties = layer_properties(plan)
+        # Written if the file has a ...SpacesPlan: block, otherwise built from
+        # the Sp.110.1 references in the plan's own SU query.
+        check.space_query = plan.space_query_for(space_field)
 
         for query, source, kind in (
             (plan.su_query, su_layer, "su"),
             (plan.feature_query, feature_layer, "feature"),
+            (check.space_query, space_layer, "space"),
         ):
             if not query:
                 continue
@@ -271,6 +307,7 @@ def build_plan_set(
     outcome: PlanSetOutcome,
     plans_group: str,
     features_group: str,
+    spaces_group: str = "",
     checks: Optional[List[PlanCheck]] = None,
     replace: bool = True,
 ) -> PlanSetOutcome:
@@ -280,10 +317,10 @@ def build_plan_set(
     everything that built. Layer order is file order, which is publication
     order, and the layer tree keeps it.
 
-    The Features group is placed above the Plans group. Features are cut into
-    and recorded within the SUs around them, so they belong on top -- and with
-    *Set map layers per phase* switched off, the tree order is the *only* thing
-    deciding it.
+    Groups are stacked Spaces / Features / Plans, top to bottom: space outlines
+    read over the whole plan, and features are cut into the SUs around them, so
+    both belong above the stratigraphy. With *Set map layers per phase* switched
+    off, the tree order is the *only* thing deciding that.
     """
     from qgis.core import QgsProject
 
@@ -295,28 +332,42 @@ def build_plan_set(
     outcome.features_group = features_group
 
     project = QgsProject.instance()
+    outcome.spaces_group = spaces_group
     has_features = any(check.feature_layer is not None for check in wanted)
+    has_spaces = spaces_group and any(
+        check.space_layer is not None for check in wanted
+    )
 
     if replace:
         clear_group(plans_group)
         if has_features:
             clear_group(features_group)
+        if has_spaces:
+            clear_group(spaces_group)
 
     plans_node = layer_tree_group(plans_group)
     features_node = layer_tree_group(features_group) if has_features else None
+    spaces_node = layer_tree_group(spaces_group) if has_spaces else None
+
+    # Stacked bottom-up while every group is still empty: reordering the tree
+    # means moving a node, and moving one with layers in it risks taking them
+    # out of the project with it. Empty, there is nothing to lose.
+    below = plans_group
     if features_node is not None:
-        # Done while both are still empty: reordering the tree means moving a
-        # node, and moving one with layers in it risks taking them out of the
-        # project with it. Empty, there is nothing to lose.
-        features_node = raise_group_above(features_group, plans_group)
+        features_node = raise_group_above(features_group, below)
+        below = features_group
+    if spaces_node is not None:
+        spaces_node = raise_group_above(spaces_group, below)
 
     for check in wanted:
-        if check.su_layer is not None:
-            project.addMapLayer(check.su_layer, False)
-            plans_node.addLayer(check.su_layer)
-        if check.feature_layer is not None and features_node is not None:
-            project.addMapLayer(check.feature_layer, False)
-            features_node.addLayer(check.feature_layer)
+        for layer, node in (
+            (check.su_layer, plans_node),
+            (check.feature_layer, features_node),
+            (check.space_layer, spaces_node),
+        ):
+            if layer is not None and node is not None:
+                project.addMapLayer(layer, False)
+                node.addLayer(layer)
 
     project.setDirty(True)
     return outcome
@@ -429,11 +480,11 @@ def clear_group(name: str, protect=()) -> int:
 
 
 def group_names(stem: str) -> tuple:
-    """Default group names for a plan file: ``Field3 Plans`` / ``Field3 Features``.
+    """Default group names: ``Field3 Plans`` / ``Field3 Features`` / ``Field3 Spaces``.
 
     A file called ``Field3PhasePlans2026_Queries.txt`` is about Field 3, so the
     leading word-and-number is the useful part of the name; the rest would only
-    make two long group names in the layer tree.
+    make three long group names in the layer tree.
     """
     import re
 
@@ -441,7 +492,11 @@ def group_names(stem: str) -> tuple:
     match = re.match(r"^[A-Za-z]*\d+", stem)
     if match:
         stem = match.group(0)
-    return f"{stem} {GROUP_SUFFIX_PLANS}", f"{stem} {GROUP_SUFFIX_FEATURES}"
+    return (
+        f"{stem} {GROUP_SUFFIX_PLANS}",
+        f"{stem} {GROUP_SUFFIX_FEATURES}",
+        f"{stem} {GROUP_SUFFIX_SPACES}",
+    )
 
 
 def summarise(outcome: PlanSetOutcome, plan_file: PlanFile) -> str:
@@ -453,14 +508,19 @@ def summarise(outcome: PlanSetOutcome, plan_file: PlanFile) -> str:
     empty = [check for check in outcome.checks if check.ok and check.empty]
     with_features = [c for c in outcome.checks if c.feature_layer is not None]
 
+    with_spaces = [c for c in outcome.checks if c.space_layer is not None]
+
     su_total = sum(c.su_count or 0 for c in outcome.checks)
     feature_total = sum(c.feature_count or 0 for c in outcome.checks)
+    space_total = sum(c.space_count or 0 for c in outcome.checks)
 
     parts = [
         f"{len(outcome.checks)} plan(s) of the {len(plan_file.maps)} in the "
-        f"file, drawing {su_total} SU polygon(s) and {feature_total} feature(s) "
-        f"in total -- an SU on three plans is counted three times.",
-        f"{len(with_features)} plan(s) draw features.",
+        f"file, drawing {su_total} SU polygon(s), {feature_total} feature(s) "
+        f"and {space_total} space(s) in total -- an SU on three plans is "
+        f"counted three times.",
+        f"{len(with_features)} plan(s) draw features, "
+        f"{len(with_spaces)} draw spaces.",
     ]
     if failed:
         parts.append(f"{len(failed)} plan(s) have a query that will not run.")
@@ -476,6 +536,9 @@ def summarise(outcome: PlanSetOutcome, plan_file: PlanFile) -> str:
 
 
 __all__ = [
+    "GROUP_SUFFIX_FEATURES",
+    "GROUP_SUFFIX_PLANS",
+    "GROUP_SUFFIX_SPACES",
     "MODE_COPY",
     "MODE_LIVE",
     "PlanCheck",

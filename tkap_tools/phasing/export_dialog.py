@@ -65,8 +65,45 @@ TITLE_MARKER_DEFAULT = "Title"
 #: the duration of the export; the real layer names are restored afterwards.
 DEFAULT_LEGEND_NAME = "Stratigraphic Units"
 
-#: Same idea for the optional companion feature layers.
+#: Same idea for the optional companion layers.
 DEFAULT_FEATURE_LEGEND_NAME = "Features"
+DEFAULT_SPACE_LEGEND_NAME = "Spaces"
+
+#: The companion groups a plan can be exported with, **in draw order, topmost
+#: first**. Spaces read over the whole plan and features are cut into the SUs
+#: around them, so both sit above the stratigraphy, spaces above features.
+#:
+#: ``legend`` is what separates them otherwise. A features layer is a thing the
+#: plan is *about* and belongs in the key; a space layer is context -- the room
+#: the stratigraphy sits in -- wanted on the map and not in the key. A slot with
+#: ``legend`` false is drawn through the map frame's own layer list and kept
+#: unchecked in the layer tree, which is what keeps it out of an auto-updating
+#: legend without touching the legend itself.
+COMPANION_SLOTS = (
+    {
+        "key": "spaces",
+        "title": "Spaces (optional)",
+        "noun": "spaces",
+        "legend": False,
+        "legend_name": DEFAULT_SPACE_LEGEND_NAME,
+        "blurb": "A group of space layers, one per plan. Each is matched to the "
+        "plan layer of the same name and drawn above everything -- on the map "
+        "only, never in the legend.",
+    },
+    {
+        "key": "features",
+        "title": "Features (optional)",
+        "noun": "features",
+        "legend": True,
+        "legend_name": DEFAULT_FEATURE_LEGEND_NAME,
+        "blurb": "A group of feature layers, one per plan. Each is matched to "
+        "the plan layer of the same name, shown with it, and drawn above the "
+        "SUs.",
+    },
+)
+
+#: Legend order under the phase layer, for the slots that appear at all.
+COMPANION_LEGEND_ORDER = ("features",)
 
 SETTINGS_PREFIX = "tkap_phasing/export"
 
@@ -116,7 +153,10 @@ class PreviewDialog(QDialog):
         self.layers = layers
         self.index = 0
         # Resolved once, on the real layer names, before any render renames them.
-        self.pairs, _ = parent._feature_pairs(layers)
+        self.pairs = {
+            spec["key"]: parent._companion_pairs(spec["key"], layers)[0]
+            for spec in COMPANION_SLOTS
+        }
 
         self.setWindowTitle("Export preview")
         # Small enough to drop onto any screen; opens larger, see below.
@@ -180,12 +220,18 @@ class PreviewDialog(QDialog):
 
         count = layer.featureCount()
         bits = [f"{count} SU(s) in this phase" if count >= 0 else "SU count unavailable"]
-        companion = self.pairs.get(layer.id())
-        if companion is not None:
+        for spec in COMPANION_SLOTS:
+            pairs = self.pairs.get(spec["key"]) or {}
+            if not pairs:
+                continue
+            label = spec["noun"]
+            companion = pairs.get(layer.id())
             # Read now, for the same reason as the caption above.
-            bits.append(f"features from '{companion.name()}'")
-        elif self.pairs:
-            bits.append("no matching features layer")
+            bits.append(
+                f"{label} from '{companion.name()}'"
+                if companion is not None
+                else f"no matching {label} layer"
+            )
         self.hint.setText("  -  ".join(bits))
 
         QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -279,40 +325,60 @@ class ExportPlansDialog(QDialog):
 
         layout.addWidget(source_box)
 
-        # --- companion feature layers ---------------------------------------
-        feature_box = QGroupBox("Features (optional)")
-        feature_form = QFormLayout(feature_box)
+        # --- companion layers, in draw order --------------------------------
+        # One identical block per slot: the two differ only in what they are
+        # called and where they land in the stack, so they are built from the
+        # same table rather than written out twice.
+        self.slots = {}
+        for spec in COMPANION_SLOTS:
+            box = QGroupBox(spec["title"])
+            form = QFormLayout(box)
 
-        self.feature_group_combo = QComboBox()
-        self.feature_group_combo.setToolTip(
-            "A group of feature layers, one per phase. Each is matched to the "
-            "phase layer of the same name, shown with it, and drawn on top."
-        )
-        feature_form.addRow("Group:", self.feature_group_combo)
+            combo = QComboBox()
+            combo.setToolTip(spec["blurb"])
+            form.addRow("Group:", combo)
 
-        self.feature_legend_edit = QLineEdit(DEFAULT_FEATURE_LEGEND_NAME)
-        self.feature_legend_edit.setToolTip(
-            "The matched feature layer is renamed to this for the export, the "
-            "same way phase layers become 'Stratigraphic Units'. Leave blank to "
-            "keep its real name."
-        )
-        feature_form.addRow("Legend name:", self.feature_legend_edit)
+            legend_edit = None
+            if spec["legend"]:
+                legend_edit = QLineEdit(spec["legend_name"])
+                legend_edit.setToolTip(
+                    f"The matched layer is renamed to this for the export, the "
+                    f"same way phase layers become '{DEFAULT_LEGEND_NAME}'. "
+                    f"Leave blank to keep its real name."
+                )
+                form.addRow("Legend name:", legend_edit)
+            else:
+                out_of_legend = QLabel(
+                    "Kept out of the legend. The matched layer is put in the "
+                    "map frame directly and left unchecked in the layer tree, "
+                    "so an auto-updating legend does not pick it up."
+                )
+                out_of_legend.setWordWrap(True)
+                out_of_legend.setStyleSheet("QLabel { color: palette(mid); }")
+                form.addRow("Legend:", out_of_legend)
 
-        self.feature_format = QLabel("")
-        self.feature_format.setWordWrap(True)
-        self.feature_format.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.feature_format.setStyleSheet(
-            "QLabel { background: palette(alternate-base); border: 1px solid "
-            "palette(mid); padding: 6px; }"
-        )
-        feature_form.addRow("Naming:", self.feature_format)
+            naming = QLabel("")
+            naming.setWordWrap(True)
+            naming.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            naming.setStyleSheet(
+                "QLabel { background: palette(alternate-base); border: 1px "
+                "solid palette(mid); padding: 6px; }"
+            )
+            form.addRow("Naming:", naming)
 
-        self.feature_hint = QLabel("")
-        self.feature_hint.setWordWrap(True)
-        self.feature_hint.setStyleSheet("QLabel { color: palette(mid); }")
-        feature_form.addRow("", self.feature_hint)
+            hint = QLabel("")
+            hint.setWordWrap(True)
+            hint.setStyleSheet("QLabel { color: palette(mid); }")
+            form.addRow("", hint)
 
-        layout.addWidget(feature_box)
+            self.slots[spec["key"]] = dict(
+                spec,
+                combo=combo,
+                legend_edit=legend_edit,
+                naming=naming,
+                hint=hint,
+            )
+            layout.addWidget(box)
 
         # --- layout --------------------------------------------------------
         layout_box = QGroupBox("Layout")
@@ -449,7 +515,8 @@ class ExportPlansDialog(QDialog):
 
     def _connect(self):
         self.group_combo.currentIndexChanged.connect(self._phase_group_changed)
-        self.feature_group_combo.currentIndexChanged.connect(self._describe_features)
+        for slot in self.slots.values():
+            slot["combo"].currentIndexChanged.connect(self._describe_companions)
         self.layout_combo.currentIndexChanged.connect(self._describe_layout)
         self.marker_edit.textChanged.connect(self._describe_layout)
         self.map_layers_check.toggled.connect(self._describe_layout)
@@ -477,7 +544,7 @@ class ExportPlansDialog(QDialog):
             if name and any(c.isdigit() for c in name):
                 self.group_combo.setCurrentIndex(index)
                 break
-        self._populate_feature_groups()
+        self._populate_companion_groups()
         self._populate_layers()
 
         manager = QgsProject.instance().layoutManager()
@@ -487,28 +554,30 @@ class ExportPlansDialog(QDialog):
         self._describe_layout()
 
     def _phase_group_changed(self):
-        # The features group must not be the phase group, so its options depend
+        # A companion group must not be the phase group, so the options depend
         # on this choice.
-        self._populate_feature_groups()
+        self._populate_companion_groups()
         self._populate_layers()
 
-    def _populate_feature_groups(self):
-        """Groups offerable as the features source: anything but the phase group."""
-        previous = self.feature_group_combo.currentData()
+    def _populate_companion_groups(self):
+        """Groups offerable as a companion source: anything but the phase group."""
         phase_group = self.group_combo.currentData()
-        blocked = self.feature_group_combo.blockSignals(True)
-        try:
-            self.feature_group_combo.clear()
-            self.feature_group_combo.addItem("<none>", None)
-            for group in QgsProject.instance().layerTreeRoot().findGroups():
-                if group.name() == phase_group:
-                    continue
-                self.feature_group_combo.addItem(group.name(), group.name())
-            index = self.feature_group_combo.findData(previous)
-            self.feature_group_combo.setCurrentIndex(max(index, 0))
-        finally:
-            self.feature_group_combo.blockSignals(blocked)
-        self._describe_features()
+        for slot in self.slots.values():
+            combo = slot["combo"]
+            previous = combo.currentData()
+            blocked = combo.blockSignals(True)
+            try:
+                combo.clear()
+                combo.addItem("<none>", None)
+                for group in QgsProject.instance().layerTreeRoot().findGroups():
+                    if group.name() == phase_group:
+                        continue
+                    combo.addItem(group.name(), group.name())
+                index = combo.findData(previous)
+                combo.setCurrentIndex(max(index, 0))
+            finally:
+                combo.blockSignals(blocked)
+        self._describe_companions()
 
     def _populate_layers(self):
         self.layer_list.clear()
@@ -519,7 +588,7 @@ class ExportPlansDialog(QDialog):
             item.setData(Qt.UserRole, layer.id())
             self.layer_list.addItem(item)
         self._update_title_example()
-        self._describe_features()
+        self._describe_companions()
 
     def _candidate_layers(self):
         root = QgsProject.instance().layerTreeRoot()
@@ -527,10 +596,10 @@ class ExportPlansDialog(QDialog):
         node = root.findGroup(group_name) if group_name else root
         if node is None:
             return []
-        # With "<all layers in project>" chosen, the features group sits inside
-        # the search too; exclude it so companions are never also treated as
-        # phase layers.
-        companion_ids = {layer.id() for layer in self._feature_layers()}
+        # With "<all layers in project>" chosen, the companion groups sit inside
+        # the search too; exclude them so a companion is never also treated as
+        # a phase layer.
+        companion_ids = {layer.id() for layer in self._all_companion_layers()}
         layers = []
         for tree_layer in node.findLayers():
             layer = tree_layer.layer()
@@ -540,12 +609,12 @@ class ExportPlansDialog(QDialog):
 
     # -- companion feature layers -----------------------------------------
 
-    def _feature_layers(self):
-        """Layers in the chosen features group; empty if none is chosen."""
-        combo = getattr(self, "feature_group_combo", None)
-        if combo is None:
+    def _companion_layers(self, key):
+        """Layers in one slot's chosen group; empty if none is chosen."""
+        slot = getattr(self, "slots", {}).get(key)
+        if slot is None:
             return []
-        group_name = combo.currentData()
+        group_name = slot["combo"].currentData()
         if not group_name:
             return []
         group = QgsProject.instance().layerTreeRoot().findGroup(group_name)
@@ -557,13 +626,21 @@ class ExportPlansDialog(QDialog):
             if tree_layer.layer() is not None
         ]
 
-    def _feature_pairs(self, phase_layers):
-        """Match phase layers to companions. Returns (id -> layer, match report).
+    def _all_companion_layers(self):
+        """Every companion layer across every slot, in draw order."""
+        out = []
+        for spec in COMPANION_SLOTS:
+            out.extend(self._companion_layers(spec["key"]))
+        return out
 
-        Must be called before any renaming happens, since the pairing is done on
-        the real layer names.
+    def _companion_pairs(self, key, phase_layers):
+        """Match phase layers to one slot's companions.
+
+        Returns (phase layer id -> companion layer, match report). Must be
+        called before any renaming happens, since the pairing is done on the
+        real layer names.
         """
-        companions = self._feature_layers()
+        companions = self._companion_layers(key)
         if not companions or not phase_layers:
             return {}, None
 
@@ -582,16 +659,16 @@ class ExportPlansDialog(QDialog):
                 pairs[layer.id()] = by_name[companion_name]
         return pairs, match
 
-    def _naming_guide(self, phase_layers):
-        """Spell out how to name the feature layers, using a real example."""
+    def _naming_guide(self, phase_layers, noun="features"):
+        """Spell out how to name one slot's layers, using a real example."""
         # A set built from a plan file is already named for you, and its names
         # carry no Sp/Phase tokens, so the space-phase advice would misdirect.
         plans = [layer for layer in phase_layers if tokens_from_layer(layer)]
         if plans and len(plans) == len(phase_layers):
             return (
-                "These layers came from a plan file, so their features layers "
+                f"These layers came from a plan file, so their {noun} layers "
                 f"are already named to match ({plans[0].name()}). Point the "
-                "group above at the Features group that was built with them."
+                f"group above at the group that was built with them."
             )
 
         example = ""
@@ -604,24 +681,32 @@ class ExportPlansDialog(QDialog):
             example, key = "Field6_Sp34_Phase1_Construction", PhaseKey(34, 1)
 
         return (
-            "One features layer per space-phase. Name it after its phase layer "
-            f"({example}), or just tag it with the space and phase "
-            f"(Features_Sp{key.space}_Phase{key.phase}). Case and punctuation are "
-            "ignored; both numbers must match. Unmatched phases export SUs only."
+            f"One {noun.rstrip('s')} layer per space-phase. Name it after its "
+            f"phase layer ({example}), or just tag it with the space and phase "
+            f"({noun.title()}_Sp{key.space}_Phase{key.phase}). Case and "
+            f"punctuation are ignored; both numbers must match. Unmatched "
+            f"phases export without it."
         )
 
-    def _describe_features(self):
+    def _describe_companions(self):
+        """Refresh every slot's naming guide and match report."""
         phase_layers = self._candidate_layers()
-        self.feature_format.setText(self._naming_guide(phase_layers))
+        for spec in COMPANION_SLOTS:
+            self._describe_slot(spec["key"], spec["noun"], phase_layers)
+        self._describe_layout()
 
-        companions = self._feature_layers()
+    def _describe_slot(self, key, noun, phase_layers):
+        slot = self.slots[key]
+        slot["naming"].setText(self._naming_guide(phase_layers, noun))
+
+        companions = self._companion_layers(key)
         if not companions:
-            self.feature_hint.setText("No features group - plans show SUs only.")
+            slot["hint"].setText(f"No group chosen - plans export without {noun}.")
             return
 
-        _, match = self._feature_pairs(phase_layers)
+        _, match = self._companion_pairs(key, phase_layers)
         if match is None:
-            self.feature_hint.setText(f"{len(companions)} layer(s), nothing to match.")
+            slot["hint"].setText(f"{len(companions)} layer(s), nothing to match.")
             return
 
         bits = [f"{match.matched} of {len(phase_layers)} phase layer(s) matched."]
@@ -629,12 +714,12 @@ class ExportPlansDialog(QDialog):
             preview = ", ".join(match.unmatched[:3])
             if len(match.unmatched) > 3:
                 preview += f", +{len(match.unmatched) - 3} more"
-            bits.append(f"No features for: {preview}")
+            bits.append(f"Nothing for: {preview}")
         if match.unused:
             preview = ", ".join(match.unused[:3])
             if len(match.unused) > 3:
                 preview += f", +{len(match.unused) - 3} more"
-            bits.append(f"Unmatched features layer(s): {preview}")
+            bits.append(f"Unmatched layer(s): {preview}")
         if match.ambiguous:
             phase, options = next(iter(match.ambiguous.items()))
             bits.append(
@@ -653,7 +738,7 @@ class ExportPlansDialog(QDialog):
                 f"Duplicate name(s): {', '.join(sorted(duplicates))} "
                 f"- only the first of each is used."
             )
-        self.feature_hint.setText("\n".join(bits))
+        slot["hint"].setText("\n".join(bits))
 
     def _describe_layout(self):
         layout = self._current_layout()
@@ -671,6 +756,18 @@ class ExportPlansDialog(QDialog):
         bits = [f"{len(maps)} map frame(s)"]
         if any(m.keepLayerSet() for m in maps) and not self.map_layers_check.isChecked():
             bits.append("map has locked layers - tick 'Set map layers per phase'")
+
+        # A slot kept out of the legend needs the explicit map layer list to be
+        # drawn at all; without it the only way to draw one is to show it, and
+        # then an auto-updating legend lists it.
+        if not self.map_layers_check.isChecked():
+            for spec in COMPANION_SLOTS:
+                if spec["legend"] or not self._companion_layers(spec["key"]):
+                    continue
+                bits.append(
+                    f"{spec['noun']} will appear in an auto-updating legend - "
+                    f"tick 'Set map layers per phase' to keep them off it"
+                )
 
         matched = self._find_title_items(layout)
         if matched:
@@ -766,22 +863,28 @@ class ExportPlansDialog(QDialog):
         self.legend_add_check.setChecked(
             settings.value(f"{SETTINGS_PREFIX}/legend_add", True, type=bool)
         )
-        self.feature_legend_edit.setText(
-            settings.value(
-                f"{SETTINGS_PREFIX}/feature_legend_name", DEFAULT_FEATURE_LEGEND_NAME
-            )
-        )
+        for spec in COMPANION_SLOTS:
+            edit = self.slots[spec["key"]]["legend_edit"]
+            if edit is not None:
+                edit.setText(
+                    settings.value(
+                        f"{SETTINGS_PREFIX}/{spec['key']}_legend_name",
+                        spec["legend_name"],
+                    )
+                )
         index = self.extent_combo.findData(
             settings.value(f"{SETTINGS_PREFIX}/extent_mode", EXTENT_LAYOUT)
         )
         if index >= 0:
             self.extent_combo.setCurrentIndex(index)
-        # Only reselect a features group that still exists in this project.
-        index = self.feature_group_combo.findData(
-            settings.value(f"{SETTINGS_PREFIX}/feature_group", None)
-        )
-        if index > 0:
-            self.feature_group_combo.setCurrentIndex(index)
+        # Only reselect a group that still exists in this project.
+        for spec in COMPANION_SLOTS:
+            combo = self.slots[spec["key"]]["combo"]
+            index = combo.findData(
+                settings.value(f"{SETTINGS_PREFIX}/{spec['key']}_group", None)
+            )
+            if index > 0:
+                combo.setCurrentIndex(index)
 
     def _apply_preselect(self, preselect):
         """Point the dialog at a set another dialog has just built.
@@ -793,15 +896,19 @@ class ExportPlansDialog(QDialog):
         if not preselect:
             return
 
-        for key, combo in (
-            ("group", self.group_combo),
-            ("feature_group", self.feature_group_combo),
-        ):
-            if key not in preselect:
-                continue
-            index = combo.findData(preselect[key])
+        if "group" in preselect:
+            index = self.group_combo.findData(preselect["group"])
             if index >= 0:
-                combo.setCurrentIndex(index)
+                self.group_combo.setCurrentIndex(index)
+
+        # Set after the phase group, whose change signal repopulates these.
+        for key, group_name in (preselect.get("companion_groups") or {}).items():
+            slot = self.slots.get(key)
+            if slot is None:
+                continue
+            index = slot["combo"].findData(group_name)
+            if index >= 0:
+                slot["combo"].setCurrentIndex(index)
 
         if preselect.get("extent_mode"):
             index = self.extent_combo.findData(preselect["extent_mode"])
@@ -839,12 +946,15 @@ class ExportPlansDialog(QDialog):
         settings.setValue(
             f"{SETTINGS_PREFIX}/legend_add", self.legend_add_check.isChecked()
         )
-        settings.setValue(
-            f"{SETTINGS_PREFIX}/feature_group", self.feature_group_combo.currentData()
-        )
-        settings.setValue(
-            f"{SETTINGS_PREFIX}/feature_legend_name", self.feature_legend_edit.text()
-        )
+        for key, slot in self.slots.items():
+            settings.setValue(
+                f"{SETTINGS_PREFIX}/{key}_group", slot["combo"].currentData()
+            )
+            if slot["legend_edit"] is not None:
+                settings.setValue(
+                    f"{SETTINGS_PREFIX}/{key}_legend_name",
+                    slot["legend_edit"].text(),
+                )
         settings.setValue(
             f"{SETTINGS_PREFIX}/extent_mode", self.extent_combo.currentData()
         )
@@ -968,15 +1078,18 @@ class ExportPlansDialog(QDialog):
             pass
         return tokens
 
-    def _plan_extent(self, layers, pairs):
+    def _plan_extent(self, layers, pairs_by_slot):
         """Union of every plan's extent, for the one-scale-for-the-set mode."""
         combined = None
         for layer in layers:
-            for entry in (layer, pairs.get(layer.id())):
-                if entry is None:
-                    continue
-                if entry is not layer and entry.crs() != layer.crs():
-                    continue
+            entries = [layer]
+            for pairs in pairs_by_slot.values():
+                companion = pairs.get(layer.id())
+                # A companion in another CRS would drag the union somewhere
+                # meaningless; the SU layer's own extent is the reliable part.
+                if companion is not None and companion.crs() == layer.crs():
+                    entries.append(companion)
+            for entry in entries:
                 extent = entry.extent()
                 if extent.isEmpty():
                     continue
@@ -1001,12 +1114,32 @@ class ExportPlansDialog(QDialog):
 
         # Companions are paired here, before anything is renamed, for the same
         # reason filenames are: the matching is done on the real layer names.
-        feature_layers = self._feature_layers()
-        feature_pairs, _ = self._feature_pairs(self._candidate_layers())
-        feature_rename_to = self.feature_legend_edit.text().strip()
+        # Slot order is draw order, topmost first.
+        slot_keys = [spec["key"] for spec in COMPANION_SLOTS]
+        # Slots whose layers must stay out of an auto-updating legend, which
+        # means staying unchecked in the layer tree.
+        hidden_keys = [
+            spec["key"] for spec in COMPANION_SLOTS if not spec["legend"]
+        ]
+        companion_layers = {key: self._companion_layers(key) for key in slot_keys}
+        pairs_by_slot = {
+            key: self._companion_pairs(key, self._candidate_layers())[0]
+            for key in slot_keys
+        }
+        rename_companions = {
+            key: (
+                self.slots[key]["legend_edit"].text().strip()
+                if self.slots[key]["legend_edit"] is not None
+                else ""
+            )
+            for key in slot_keys
+        }
+        all_companions = [
+            layer for key in slot_keys for layer in companion_layers[key]
+        ]
 
         original_visibility = {}
-        for layer in siblings + (feature_layers if hide_others else []):
+        for layer in siblings + (all_companions if hide_others else []):
             node = root.findLayer(layer.id())
             if node is not None:
                 original_visibility[layer.id()] = node.isVisible()
@@ -1037,7 +1170,7 @@ class ExportPlansDialog(QDialog):
             if extent_mode == EXTENT_COMBINED:
                 combined_extent = self._plan_extent(
                     self._checked_layers() if layers is None else layers,
-                    feature_pairs,
+                    pairs_by_slot,
                 )
 
         # Captured before anything is renamed, so restoration is exact even if
@@ -1051,9 +1184,10 @@ class ExportPlansDialog(QDialog):
         if rename_to:
             for candidate in self._candidate_layers():
                 original_names[candidate.id()] = candidate.name()
-        if feature_rename_to:
-            for companion in feature_layers:
-                original_names.setdefault(companion.id(), companion.name())
+        for key in slot_keys:
+            if rename_companions[key]:
+                for companion in companion_layers[key]:
+                    original_names.setdefault(companion.id(), companion.name())
 
         # A legend with Auto update ON follows the project layer tree, and its
         # model root IS that tree -- inserting there would alter the project.
@@ -1080,7 +1214,7 @@ class ExportPlansDialog(QDialog):
             # Both phase layers and companions are placed explicitly per phase,
             # so neither may be left sitting in the static background.
             managed_ids = {lyr.id() for lyr in self._candidate_layers()}
-            managed_ids |= {lyr.id() for lyr in feature_layers}
+            managed_ids |= {lyr.id() for lyr in all_companions}
             original_keep_layer_set = map_item.keepLayerSet()
             original_map_layers = list(map_item.layers())
             if original_keep_layer_set and original_map_layers:
@@ -1100,19 +1234,47 @@ class ExportPlansDialog(QDialog):
                         background.append(lyr)
 
         def apply(layer):
-            companion = feature_pairs.get(layer.id())
+            # Draw order, topmost first: spaces over features over the SUs.
+            matched = {
+                key: pairs_by_slot[key].get(layer.id()) for key in slot_keys
+            }
+            companions = [
+                matched[key] for key in slot_keys if matched[key] is not None
+            ]
+            wanted_ids = {entry.id() for entry in companions}
 
             for sibling in siblings:
                 node = root.findLayer(sibling.id())
                 if node is not None:
                     node.setItemVisibilityChecked(sibling.id() == layer.id())
+
+            # A slot kept out of the legend is drawn through the map frame's
+            # own layer list, so its layers stay unchecked and an auto-updating
+            # legend never sees them. Without the explicit map list there is
+            # nothing else to draw them, so there the matched one is shown and
+            # the legend hint says it will appear.
+            for key in hidden_keys:
+                for other in companion_layers[key]:
+                    node = root.findLayer(other.id())
+                    if node is None:
+                        continue
+                    node.setItemVisibilityChecked(
+                        not set_map
+                        and matched[key] is not None
+                        and other.id() == matched[key].id()
+                    )
+
             if hide_others:
-                for other in feature_layers:
+                for other in all_companions:
+                    if any(
+                        other.id() == entry.id()
+                        for key in hidden_keys
+                        for entry in companion_layers[key]
+                    ):
+                        continue  # handled above, and not by visibility rules
                     node = root.findLayer(other.id())
                     if node is not None:
-                        node.setItemVisibilityChecked(
-                            companion is not None and other.id() == companion.id()
-                        )
+                        node.setItemVisibilityChecked(other.id() in wanted_ids)
 
             # Tokens first: they can fall back to parsing the layer name, which
             # the legend rename below would otherwise have destroyed.
@@ -1122,21 +1284,24 @@ class ExportPlansDialog(QDialog):
                     item.setText(text)
 
             if set_map:
-                # Order is draw order, topmost first: features sit above the SUs
-                # they were recorded in, and both above the background.
-                stack = [layer]
-                if companion is not None:
-                    stack.insert(0, companion)
-                map_item.setLayers(stack + background)
+                # Order is draw order, topmost first: spaces read over the whole
+                # plan, features sit above the SUs they were recorded in, and
+                # all three above the background.
+                map_item.setLayers(companions + [layer] + background)
                 map_item.setKeepLayerSet(True)
 
             if rename_to:
                 layer.setName(rename_to)
-            if companion is not None and feature_rename_to:
-                companion.setName(feature_rename_to)
+            for key in slot_keys:
+                if matched[key] is not None and rename_companions[key]:
+                    matched[key].setName(rename_companions[key])
 
             # After the renames, so the legend nodes pick up the new names.
-            wanted = [layer] + ([companion] if companion is not None else [])
+            wanted = [layer] + [
+                matched[key]
+                for key in COMPANION_LEGEND_ORDER
+                if matched.get(key) is not None
+            ]
             for index, legend in enumerate(manual_legends):
                 try:
                     group = legend.model().rootGroup()
@@ -1154,11 +1319,12 @@ class ExportPlansDialog(QDialog):
                         inserted_layer_ids[index].append(entry.id())
 
             if map_item is not None and extent_mode == EXTENT_EACH:
-                extent = layer.extent()
-                if companion is not None and companion.crs() == layer.crs():
-                    companion_extent = companion.extent()
+                extent = QgsRectangle(layer.extent())
+                for entry in companions:
+                    if entry.crs() != layer.crs():
+                        continue
+                    companion_extent = entry.extent()
                     if not companion_extent.isEmpty():
-                        extent = QgsRectangle(extent)
                         extent.combineExtentWith(companion_extent)
                 if not extent.isEmpty():
                     map_item.zoomToExtent(extent)

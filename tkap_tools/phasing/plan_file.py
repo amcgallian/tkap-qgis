@@ -20,10 +20,16 @@ writes:
     "area" = '3'
     AND "sunumber" IN ('1819', '1820', '1823', '1847')
 
-Each ``Map Title:`` starts a plan. The blocks under it are provider filters, one
-for the Features layer and one for the SU layer, applied verbatim -- this module
-never rewrites a query, so what was tested in the Query Builder is what the plan
-gets.
+Each ``Map Title:`` starts a plan. The blocks under it are provider filters --
+one for the SU layer, one for the Features layer, and optionally one for the
+Spaces layer -- applied verbatim: this module never rewrites a query, so what
+was tested in the Query Builder is what the plan gets.
+
+The Spaces query is usually not written at all. An SU query already says which
+spaces its plan is about, in the ``Sp.110.1`` references it filters on, so
+:meth:`PlanMap.space_query_for` reads them back out and builds
+``"space" IN ('110', '111')`` from them. A ``...SpacesPlan:`` block overrides
+that for a plan where the spaces are not what the SU query implies.
 
 Deliberately free of any ``qgis`` import, like the parsing half of
 :mod:`phasing_core`, so the format can be exercised from a plain interpreter.
@@ -34,6 +40,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field as dc_field
 from typing import Dict, List, Optional, Tuple
+
+from .phasing_core import sql_identifier, sql_literal
 
 #: ``---------`` or ``=========``: a rule bracketing a heading.
 _DASH_RULE_RE = re.compile(r"^-{3,}$")
@@ -53,12 +61,20 @@ _MAP_TITLE_RE = re.compile(r"^map\s*title\s*:\s*(?P<title>.+?)\s*$", re.IGNORECA
 #: never be mistaken for one.
 _BLOCK_RE = re.compile(r"^(?P<name>[^\s:]+)\s*:\s*$")
 
+#: ``Sp.110.1`` wherever it appears -- including inside the ``LIKE`` literal of
+#: an SU query, which is where a plan says which spaces it is about. Deliberately
+#: looser than ``phasing_core.ENTRY_RE``: that one wants the ``(Phase Name)`` a
+#: real ``space_phase`` value carries, and a query pattern has been cut off
+#: before it (``'%Sp.110.1 (%'``).
+_SPACE_REF_RE = re.compile(r"Sp\.(?P<space>\d+)(?:\.(?P<phase>\d+))?")
+
 #: Leading numbering on a title: ``3.2.1`` out of ``3.2.1 Early Hellenistic``.
 _NUMBER_RE = re.compile(r"^(?P<number>\d+(?:\.\d+)*)[.)]?(?:\s+|$)")
 
 #: Which layer a query block is for.
 KIND_FEATURES = "features"
 KIND_SUS = "sus"
+KIND_SPACES = "spaces"
 
 #: ``SU``/``SUs`` as a word inside a run-together block name -- the ``SUs`` in
 #: ``Field3.2.1SUsPlan`` or in ``LateIronAgeSUsPlan``.
@@ -84,6 +100,8 @@ def classify_block(block_name: str) -> Optional[str]:
     name = block_name or ""
     if "feature" in name.casefold():
         return KIND_FEATURES
+    if "space" in name.casefold():
+        return KIND_SPACES
     if _SU_TOKEN_RE.search(name):
         return KIND_SUS
     if "stratigraphic" in name.casefold():
@@ -113,10 +131,12 @@ class PlanMap:
     section: str = ""
     su_query: str = ""
     feature_query: str = ""
+    space_query: str = ""
     #: Block names the queries came from, so an error can point at the file
     #: rather than at the layer it produced.
     su_block: str = ""
     feature_block: str = ""
+    space_block: str = ""
     #: 1-based line of the ``Map Title:`` that opened this plan.
     line: int = 0
 
@@ -130,7 +150,38 @@ class PlanMap:
 
     @property
     def has_queries(self) -> bool:
-        return bool(self.su_query or self.feature_query)
+        return bool(self.su_query or self.feature_query or self.space_query)
+
+    @property
+    def spaces(self) -> List[str]:
+        """Space numbers this plan is about, in the order the file mentions them.
+
+        Read out of the SU query's own ``Sp.110.1`` references, so a plan file
+        that never mentions spaces separately still knows which ones it covers.
+        A plan defined purely by SU number -- 3.1 in the TKAP file is a bare
+        ``sunumber IN (...)`` -- names no spaces, and correctly gets none.
+        """
+        out: List[str] = []
+        for match in _SPACE_REF_RE.finditer(self.su_query or ""):
+            space = match.group("space")
+            if space not in out:
+                out.append(space)
+        return out
+
+    def space_query_for(self, field: str = "space") -> str:
+        """The query for the Spaces layer: the written one, or one derived.
+
+        A ``...SpacesPlan:`` block wins outright. Otherwise the spaces named in
+        the SU query become ``"space" IN ('110', '111')`` -- which is the query
+        somebody would have written by hand, off the same information.
+        """
+        if self.space_query:
+            return self.space_query
+        spaces = self.spaces
+        if not spaces or not field:
+            return ""
+        listed = ", ".join(sql_literal(space) for space in spaces)
+        return f"{sql_identifier(field)} IN ({listed})"
 
     def tokens(self, layer_name: str = "") -> Dict[str, str]:
         """Title placeholders for this plan. See ``phasing_core.format_title``."""
@@ -140,6 +191,7 @@ class PlanMap:
             "number": number,
             "name": name,
             "section": self.section,
+            "spaces": ", ".join(self.spaces),
             "layer": layer_name,
         }
 
@@ -178,7 +230,7 @@ class PlanFile:
 
 #: Tokens a plan layer remembers about itself, and the placeholders they fill
 #: in a title template.
-PLAN_TOKENS = ("title", "number", "name", "section")
+PLAN_TOKENS = ("title", "number", "name", "section", "spaces")
 
 #: Custom-property namespace. QGIS saves custom properties with the project, so
 #: a plan layer still knows its title after QGIS is closed and reopened -- which
@@ -317,9 +369,14 @@ FIELD {field} PHASE PLANS {year} - MAP TITLES & QUERIES
 #                       layout's title label and names the exported file after.
 #
 #   ...SUsPlan:         a query block. The name is yours; only its ending
-#   ...FeaturesPlan:    matters -- SUs or Features, which is how the plugin
-#                       knows which layer to run it against. Put the query on
-#                       the line(s) under it, and end it with a blank line.
+#   ...FeaturesPlan:    matters -- SUs, Features or Spaces, which is how the
+#   ...SpacesPlan:      plugin knows which layer to run it against. Put the
+#                       query on the line(s) under it, end it with a blank line.
+#
+#                       You rarely need a Spaces block. An SU query filtering on
+#                       Sp.110.1 has already said the plan is about space 110,
+#                       so the plugin builds "space" IN ('110') from it. Write
+#                       the block only to override that.
 #
 #   ------ rules        a section heading, purely for reading. The heading
 #                       between two rules is remembered as {{section}} if you
@@ -354,7 +411,9 @@ Field{field}.2.1FeaturesPlan:
 "field" = '{field}' AND "feature" IN ('145', '148')
 
 # A whole space-phase, plus one SU that belongs on the plan but is not in it,
-# minus two that are. This is the shape most plans end up being.
+# minus two that are. This is the shape most plans end up being. The Sp.110.1
+# below is also what gets this plan its space layer, with nothing further to
+# write: "space" IN ('110').
 Field{field}.2.1SUsPlan:
 "area" = '{field}'
 AND "sunumber" NOT IN ('1961', '1924')
@@ -441,23 +500,20 @@ def _attach(
     if kind is None:
         result.warnings.append(
             f"Block '{name}' (under '{current.title}') does not say which layer "
-            f"it is for. Name it ...FeaturesPlan or ...SUsPlan; ignored."
+            f"it is for. Name it ...SUsPlan, ...FeaturesPlan or ...SpacesPlan; "
+            f"ignored."
         )
         return
 
-    if kind == KIND_FEATURES:
-        if current.feature_query:
-            result.warnings.append(
-                f"'{current.title}' has more than one Features block; "
-                f"'{current.feature_block}' is used and '{name}' ignored."
-            )
-            return
-        current.feature_query, current.feature_block = body, name
-    else:
-        if current.su_query:
-            result.warnings.append(
-                f"'{current.title}' has more than one SUs block; "
-                f"'{current.su_block}' is used and '{name}' ignored."
-            )
-            return
-        current.su_query, current.su_block = body, name
+    label = {KIND_FEATURES: "Features", KIND_SPACES: "Spaces", KIND_SUS: "SUs"}[kind]
+    attribute = {KIND_FEATURES: "feature", KIND_SPACES: "space", KIND_SUS: "su"}[kind]
+
+    if getattr(current, f"{attribute}_query"):
+        result.warnings.append(
+            f"'{current.title}' has more than one {label} block; "
+            f"'{getattr(current, f'{attribute}_block')}' is used and '{name}' "
+            f"ignored."
+        )
+        return
+    setattr(current, f"{attribute}_query", body)
+    setattr(current, f"{attribute}_block", name)

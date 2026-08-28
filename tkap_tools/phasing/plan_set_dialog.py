@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 
 from qgis.core import QgsProject, QgsSettings
-from qgis.gui import QgsMapLayerComboBox
+from qgis.gui import QgsFieldComboBox, QgsMapLayerComboBox
 
 try:
     from qgis.core import QgsMapLayerProxyModel
@@ -60,6 +60,18 @@ from .plan_set_runner import (
 )
 
 SETTINGS_PREFIX = "tkap_phasing/plan_set"
+
+#: Best guesses for the space-number column on the Spaces layer, in priority
+#: order. Only used to seed the combo; the operator can pick any field.
+SPACE_FIELD_CANDIDATES = (
+    "space",
+    "space_number",
+    "spacenumber",
+    "space_no",
+    "spaceno",
+    "space_id",
+    "number",
+)
 
 #: Title template handed to the export dialog. The plan file already wrote the
 #: title out in full, so the default is to use it verbatim.
@@ -138,9 +150,11 @@ class PlanSetDialog(QDialog):
 
         self.format_hint = QLabel(
             "One 'Map Title:' per plan, then a block per layer -- a name ending "
-            "in FeaturesPlan or SUsPlan, a colon, and the query under it. "
-            "'-----' rules mark sections, '#' lines are notes. Queries are used "
-            "exactly as written."
+            "in SUsPlan, FeaturesPlan or SpacesPlan, a colon, and the query "
+            "under it. '-----' rules mark sections, '#' lines are notes. "
+            "Queries are used exactly as written.\n"
+            "A Spaces block is rarely needed: an SU query filtering on Sp.110.1 "
+            "has already said the plan is about space 110."
         )
         self.format_hint.setWordWrap(True)
         self.format_hint.setStyleSheet("QLabel { color: palette(mid); }")
@@ -177,6 +191,28 @@ class PlanSetDialog(QDialog):
         )
         layer_form.addRow("Features layer:", self.feature_combo)
 
+        self.space_combo = QgsMapLayerComboBox()
+        self.space_combo.setFilters(QgsMapLayerProxyModel.PolygonLayer)
+        self.space_combo.setAllowEmptyLayer(True)
+        self.space_combo.setToolTip(
+            "The layer of space polygons. Leave empty to build plans without "
+            "spaces."
+        )
+        layer_form.addRow("Spaces layer:", self.space_combo)
+
+        self.space_field_combo = QgsFieldComboBox()
+        self.space_field_combo.setAllowEmptyFieldName(True)
+        self.space_field_combo.setToolTip(
+            "The column holding the space number. Used to build each plan's "
+            "space query from the Sp.110.1 references in its SU query."
+        )
+        layer_form.addRow("Space number field:", self.space_field_combo)
+
+        self.space_hint = QLabel("")
+        self.space_hint.setWordWrap(True)
+        self.space_hint.setStyleSheet("QLabel { color: palette(mid); }")
+        layer_form.addRow("", self.space_hint)
+
         self.match_hint = QLabel("")
         self.match_hint.setWordWrap(True)
         self.match_hint.setStyleSheet("QLabel { color: palette(mid); }")
@@ -195,8 +231,10 @@ class PlanSetDialog(QDialog):
         self.summary.setMinimumHeight(64)
         layout.addWidget(self.summary)
 
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["Plan", "SUs", "Features", "Status"])
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(
+            ["Plan", "SUs", "Features", "Spaces", "Status"]
+        )
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionMode(QAbstractItemView.NoSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -206,6 +244,7 @@ class PlanSetDialog(QDialog):
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         layout.addWidget(self.table)
 
         select_row = QHBoxLayout()
@@ -242,13 +281,15 @@ class PlanSetDialog(QDialog):
         self.features_group_edit = QLineEdit()
         group_form.addRow("Features group:", self.features_group_edit)
 
+        self.spaces_group_edit = QLineEdit()
+        group_form.addRow("Spaces group:", self.spaces_group_edit)
+
         note = QLabel(
-            "Both layers of a plan take the plan's name, which is how the export "
-            "dialog pairs them. Rebuilding replaces what is in these groups, "
-            "never the layers chosen above.\n"
-            "The SU and Features layers are only ever read. A plan is a separate "
-            "live view of the same source with its own filter, and is read-only "
-            "so an edit session cannot reach the database."
+            "Every layer of a plan takes the plan's name, which is how the "
+            "export dialog pairs them. The groups are stacked Spaces / Features "
+            "/ Plans, top to bottom, so both draw over the stratigraphy.\n"
+            "Rebuilding replaces what is in these groups, never the layers the "
+            "queries ran against -- those are only ever read."
         )
         note.setWordWrap(True)
         note.setStyleSheet("QLabel { color: palette(mid); }")
@@ -283,6 +324,8 @@ class PlanSetDialog(QDialog):
         self.feature_combo.layerChanged.connect(
             lambda _: self._layer_picked("feature")
         )
+        self.space_combo.layerChanged.connect(lambda _: self._space_layer_picked())
+        self.space_field_combo.fieldChanged.connect(lambda _: self._check())
         self.mode_combo.currentIndexChanged.connect(self._mode_changed)
         self.all_button.clicked.connect(lambda: self._set_all(True))
         self.none_button.clicked.connect(lambda: self._set_all(False))
@@ -373,25 +416,20 @@ class PlanSetDialog(QDialog):
 
         self._loaded_path = path
         stem = os.path.splitext(os.path.basename(path))[0]
-        plans_group, features_group = group_names(stem)
+        suggestions = group_names(stem)
         # Seeded from the file name, but never over a name typed by hand: only
         # a box left blank or still holding the last file's suggestion moves.
-        for edit, suggestion, previous in (
-            (
-                self.plans_group_edit,
-                plans_group,
-                (self._seeded_groups or ("", ""))[0],
-            ),
-            (
-                self.features_group_edit,
-                features_group,
-                (self._seeded_groups or ("", ""))[1],
-            ),
-        ):
+        previous = self._seeded_groups or ("",) * len(suggestions)
+        edits = (
+            self.plans_group_edit,
+            self.features_group_edit,
+            self.spaces_group_edit,
+        )
+        for edit, suggestion, was in zip(edits, suggestions, previous):
             current = edit.text().strip()
-            if not current or current == previous:
+            if not current or current == was:
                 edit.setText(suggestion)
-        self._seeded_groups = (plans_group, features_group)
+        self._seeded_groups = suggestions
 
         self.warnings_box.setPlainText("\n".join(self.plan_file.warnings))
         self._guess_layers()
@@ -465,6 +503,57 @@ class PlanSetDialog(QDialog):
                 finally:
                     combo.blockSignals(blocked)
 
+        self._guess_space_layer(candidates, taken)
+
+    def _guess_space_layer(self, candidates, taken):
+        """Seed the Spaces combo with the layer that has a space-number column.
+
+        Scored differently from the other two: a plan file usually carries no
+        space query to test a layer against, so the evidence is the column
+        itself. A layer with a field called ``space`` and nothing else claiming
+        it is the Spaces layer.
+        """
+        if "space" in self._picked:
+            return
+        best, best_rank = None, len(SPACE_FIELD_CANDIDATES)
+        for layer in candidates:
+            if layer.id() in taken:
+                continue
+            names = {field.name().casefold() for field in layer.fields()}
+            for rank, candidate in enumerate(SPACE_FIELD_CANDIDATES):
+                if candidate in names and rank < best_rank:
+                    best, best_rank = layer, rank
+                    break
+        if best is None:
+            return
+        blocked = self.space_combo.blockSignals(True)
+        try:
+            self.space_combo.setLayer(best)
+        finally:
+            self.space_combo.blockSignals(blocked)
+        self._sync_space_field()
+
+    def _sync_space_field(self):
+        """Point the field combo at the Spaces layer and pick the likely column."""
+        layer = self.space_combo.currentLayer()
+        blocked = self.space_field_combo.blockSignals(True)
+        try:
+            self.space_field_combo.setLayer(layer)
+            if layer is None:
+                return
+            names = {field.name().casefold(): field.name() for field in layer.fields()}
+            for candidate in SPACE_FIELD_CANDIDATES:
+                if candidate in names:
+                    self.space_field_combo.setField(names[candidate])
+                    return
+        finally:
+            self.space_field_combo.blockSignals(blocked)
+
+    def _space_layer_picked(self):
+        self._picked.add("space")
+        self._sync_space_field()
+        self._check()
+
     def _layer_picked(self, which):
         """A combo the operator changed themselves; guessing leaves it alone."""
         self._picked.add(which)
@@ -496,7 +585,8 @@ class PlanSetDialog(QDialog):
 
         su_layer = self.su_combo.currentLayer()
         feature_layer = self.feature_combo.currentLayer()
-        if su_layer is None and feature_layer is None:
+        space_layer = self.space_combo.currentLayer()
+        if su_layer is None and feature_layer is None and space_layer is None:
             self.summary.setText(
                 f"{len(self.plan_file.usable)} plan(s) read. Choose the layers "
                 f"the queries run against."
@@ -523,6 +613,8 @@ class PlanSetDialog(QDialog):
                 self.plan_file,
                 su_layer,
                 feature_layer,
+                space_layer,
+                space_field=self._space_field(),
                 inherit_style=INHERIT_STYLE,
                 mode=self.mode_combo.currentData(),
                 progress=self._progress,
@@ -533,7 +625,8 @@ class PlanSetDialog(QDialog):
 
         self._fill_table()
         self.summary.setText(summarise(self.outcome, self.plan_file))
-        self._describe_layers(su_layer, feature_layer)
+        self._describe_layers(su_layer, feature_layer, space_layer)
+        self._describe_spaces(space_layer)
 
     def _progress(self, done, total, label):
         self.progress.setMaximum(total)
@@ -541,9 +634,59 @@ class PlanSetDialog(QDialog):
         self.progress.setFormat(f"%v / %m  {label}")
         QApplication.processEvents()
 
-    def _describe_layers(self, su_layer, feature_layer):
+    def _space_field(self):
+        """The chosen space-number column, quoted into the derived query."""
+        try:
+            return self.space_field_combo.currentField() or ""
+        except Exception:  # pragma: no cover - depends on QGIS build
+            return ""
+
+    def _describe_spaces(self, space_layer):
+        """Say where each plan's space query is coming from."""
+        if space_layer is None:
+            self.space_hint.setText(
+                "No Spaces layer - plans are built without spaces."
+            )
+            return
+        if not self._space_field():
+            self.space_hint.setText(
+                "Choose the column holding the space number, or the space query "
+                "cannot be built."
+            )
+            return
+
+        plans = self.plan_file.usable if self.plan_file else []
+        written = [p for p in plans if p.space_query]
+        derived = [p for p in plans if not p.space_query and p.spaces]
+        silent = [p for p in plans if not p.space_query and not p.spaces]
+
         bits = []
-        for layer, role in ((su_layer, "SU"), (feature_layer, "Features")):
+        if derived:
+            example = derived[0]
+            bits.append(
+                f"{len(derived)} plan(s) get a space query built from the "
+                f"Sp.n.n in their SU query, e.g. {example.title} -> "
+                f"{example.space_query_for(self._space_field())}"
+            )
+        if written:
+            bits.append(f"{len(written)} plan(s) have a SpacesPlan block of their own.")
+        if silent:
+            preview = ", ".join(p.title for p in silent[:2])
+            if len(silent) > 2:
+                preview += f", +{len(silent) - 2} more"
+            bits.append(
+                f"{len(silent)} plan(s) name no spaces and get no space layer: "
+                f"{preview}"
+            )
+        self.space_hint.setText("\n".join(bits))
+
+    def _describe_layers(self, su_layer, feature_layer, space_layer=None):
+        bits = []
+        for layer, role in (
+            (su_layer, "SU"),
+            (feature_layer, "Features"),
+            (space_layer, "Spaces"),
+        ):
             if layer is not None and layer.providerType() == "memory":
                 # A plan is a second layer over the same source. A scratch layer
                 # has no source to reopen -- every plan would come out empty,
@@ -562,7 +705,7 @@ class PlanSetDialog(QDialog):
         if su_layer is None:
             bits.append("No SU layer: the SU half of every plan is skipped.")
         if feature_layer is None:
-            bits.append("No Features layer: plans will show SUs only.")
+            bits.append("No Features layer: plans will show no features.")
         if self.outcome is not None:
             broken = [check for check in self.outcome.checks if not check.ok]
             if broken:
@@ -587,15 +730,21 @@ class PlanSetDialog(QDialog):
             # still says why, and can be ticked once the file is fixed.
             item.setCheckState(Qt.Checked if check.ok else Qt.Unchecked)
             item.setData(Qt.UserRole, row)
+            derived = "" if check.plan.space_query else "  (derived)"
             item.setToolTip(
                 f"Layer name: {check.layer_name}\n"
                 f"Section: {check.plan.section or '-'}\n\n"
                 f"SUs:\n{check.plan.su_query or '-'}\n\n"
-                f"Features:\n{check.plan.feature_query or '-'}"
+                f"Features:\n{check.plan.feature_query or '-'}\n\n"
+                f"Spaces{derived}:\n{check.space_query or '-'}"
             )
             self.table.setItem(row, 0, item)
 
-            for column, count in ((1, check.su_count), (2, check.feature_count)):
+            for column, count in (
+                (1, check.su_count),
+                (2, check.feature_count),
+                (3, check.space_count),
+            ):
                 cell = QTableWidgetItem("-" if count is None else str(count))
                 cell.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 if count == 0:
@@ -606,7 +755,7 @@ class PlanSetDialog(QDialog):
             if not check.ok:
                 status.setForeground(red)
             status.setToolTip(check.status())
-            self.table.setItem(row, 3, status)
+            self.table.setItem(row, 4, status)
 
     def _set_all(self, checked):
         for row in range(self.table.rowCount()):
@@ -654,12 +803,15 @@ class PlanSetDialog(QDialog):
 
         plans_group = self.plans_group_edit.text().strip() or "Plans"
         features_group = self.features_group_edit.text().strip() or "Features"
-        if plans_group == features_group:
+        spaces_group = self.spaces_group_edit.text().strip() or "Spaces"
+        names = (plans_group, features_group, spaces_group)
+        if len(set(names)) != len(names):
             QMessageBox.warning(
                 self,
                 "Same group twice",
-                "The plans and the features need two different groups -- the "
-                "export dialog tells them apart by which group they are in.",
+                "The plans, the features and the spaces each need their own "
+                "group -- the export dialog tells them apart by which group "
+                "they are in.",
             )
             return None
 
@@ -671,12 +823,13 @@ class PlanSetDialog(QDialog):
             for layer in (
                 self.su_combo.currentLayer(),
                 self.feature_combo.currentLayer(),
+                self.space_combo.currentLayer(),
             )
             if layer is not None
         }
         standing = {
             name: group_layer_count(name, protect)
-            for name in (plans_group, features_group)
+            for name in names
             if group_layer_count(name, protect)
         }
         if standing:
@@ -694,29 +847,31 @@ class PlanSetDialog(QDialog):
             if reply != QMessageBox.Yes:
                 return None
 
-        self._replaced = sum(
-            clear_group(name, protect) for name in (plans_group, features_group)
-        )
+        self._replaced = sum(clear_group(name, protect) for name in names)
 
         build_plan_set(
             self.outcome,
             plans_group,
             features_group,
+            spaces_group,
             checks=checks,
             replace=False,
         )
         self._store_settings()
-        return plans_group, features_group
+        return names
 
     def _build_only(self):
         checks = self._checked()
         groups = self._build()
         if groups is None:
             return
-        plans_group, features_group = groups
-        where = f"'{plans_group}'"
+        plans_group, features_group, spaces_group = groups
+        built_in = [plans_group]
         if any(check.feature_layer is not None for check in checks):
-            where += f" and '{features_group}'"
+            built_in.append(features_group)
+        if any(check.space_layer is not None for check in checks):
+            built_in.append(spaces_group)
+        where = ", ".join(f"'{name}'" for name in built_in)
         replaced = (
             f"\n\n{self._replaced} layer(s) already in those groups were replaced."
             if self._replaced
@@ -734,6 +889,9 @@ class PlanSetDialog(QDialog):
     def _any_features(self):
         return any(check.feature_layer is not None for check in self._checked())
 
+    def _any_spaces(self):
+        return any(check.space_layer is not None for check in self._checked())
+
     def _build_and_export(self):
         """Build, then ask the caller to open the export dialog on the result.
 
@@ -741,16 +899,23 @@ class PlanSetDialog(QDialog):
         the next one inside its own event loop would nest them.
         """
         has_features = self._any_features()
+        has_spaces = self._any_spaces()
         groups = self._build()
         if groups is None:
             return
-        plans_group, features_group = groups
+        plans_group, features_group, spaces_group = groups
 
         from .export_dialog import EXTENT_COMBINED
 
+        companion_groups = {}
+        if has_features:
+            companion_groups["features"] = features_group
+        if has_spaces:
+            companion_groups["spaces"] = spaces_group
+
         self.export_request = {
             "group": plans_group,
-            "feature_group": features_group if has_features else None,
+            "companion_groups": companion_groups,
             "template": DEFAULT_PLAN_TEMPLATE,
             "extent_mode": EXTENT_COMBINED,
         }
@@ -766,6 +931,9 @@ class PlanSetDialog(QDialog):
         )
         self.features_group_edit.setText(
             settings.value(f"{SETTINGS_PREFIX}/features_group", "")
+        )
+        self.spaces_group_edit.setText(
+            settings.value(f"{SETTINGS_PREFIX}/spaces_group", "")
         )
         index = self.mode_combo.findData(
             settings.value(f"{SETTINGS_PREFIX}/mode", MODE_COPY)
@@ -795,5 +963,9 @@ class PlanSetDialog(QDialog):
         settings.setValue(
             f"{SETTINGS_PREFIX}/features_group",
             self.features_group_edit.text().strip(),
+        )
+        settings.setValue(
+            f"{SETTINGS_PREFIX}/spaces_group",
+            self.spaces_group_edit.text().strip(),
         )
         settings.setValue(f"{SETTINGS_PREFIX}/mode", self.mode_combo.currentData())

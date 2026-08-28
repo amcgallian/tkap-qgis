@@ -126,7 +126,7 @@ AND "sunumber" IN ('1819', '1820', '1823', '1847')</code></pre>
   <table>
     <tr><th>Line</th><th>What it is</th></tr>
     <tr><td><code>Map Title:</code></td><td>Starts a plan. The rest of the line is the title, which becomes the layout's title and the file name.</td></tr>
-    <tr><td><code>…SUsPlan:</code> / <code>…FeaturesPlan:</code></td><td>A query block. Only the ending matters — it says which layer to run the query against. The query goes on the line(s) under it and ends at a blank line.</td></tr>
+    <tr><td><code>…SUsPlan:</code> / <code>…FeaturesPlan:</code> / <code>…SpacesPlan:</code></td><td>A query block. Only the ending matters — it says which layer to run the query against. The query goes on the line(s) under it and ends at a blank line.</td></tr>
     <tr><td><code>------</code> rules</td><td>A section heading, for reading. Available as <code>{section}</code> in a title template.</td></tr>
     <tr><td><code>#</code> lines</td><td>Notes, ignored. Comment out a plan rather than deleting a query you spent an afternoon getting right.</td></tr>
   </table>
@@ -138,6 +138,15 @@ AND "sunumber" IN ('1819', '1820', '1823', '1847')</code></pre>
     <section class="step">
       <h3>Open it</h3>
       <p><strong>Plugins → TKAP Tools → Plans from a Plan File…</strong> Don't have a file yet? <strong>Save a template to fill in…</strong> writes one with the format explained in it and two working example plans, and loads it so you can see it working before changing a word.</p>
+    </section>
+
+    <section class="step">
+      <h3>Spaces come free</h3>
+      <p>You rarely write a <code>…SpacesPlan:</code> block. An SU query filtering on <code>Sp.110.1</code> has already said its plan is about space 110, so the spaces are read back out of it and become the Spaces layer's filter:</p>
+      <pre><code>3.2.1 mentions Sp.110.1 and Sp.111.1, so its space layer gets:
+"space" IN ('110', '111')</code></pre>
+      <p>Pick the Spaces layer and the space-number field — both guessed for you — and every plan that names a space gets one. In the Field 3 file that is 15 of the 16; 3.1 is a bare <code>sunumber</code> list, names no space, and correctly gets none. A written <code>…SpacesPlan:</code> block always wins over the derived one.</p>
+      <p><strong>Spaces never go in the legend.</strong> They are context, not a subject of the plan, so each plan's space layer goes straight into the map frame and stays unchecked in the layer tree — which keeps an auto-updating legend from listing it.</p>
     </section>
 
     <section class="step">
@@ -170,7 +179,7 @@ AND "sunumber" IN ('1819', '1820', '1823', '1847')</code></pre>
     <section class="step">
       <h3>Build and export</h3>
       <p>Each plan becomes a layer named after its title — <code>3.1 Hellenistic Pitting and Abandonment</code>, verbatim, since layer names have no characters to sanitise away. File names still come out safe: <code>3.1_Hellenistic_Pitting_and_Abandonment.jpg</code>.</p>
-      <p>They go into two groups: the SU plans in one, their features in the other, both taking the plan's name so Export Phase Plans pairs them automatically. The <strong>Features group sits above the Plans group</strong>, because a feature is cut into the SUs around it and has to draw on top — and the export forces that same order in the map frame, so features are on top either way.</p>
+      <p>They go into three groups — the SU plans, their features, their spaces — all taking the plan's name so Export Phase Plans pairs them automatically. The groups are stacked <strong>Spaces / Features / Plans</strong>, top to bottom, because space outlines read over the whole plan and a feature is cut into the SUs around it. The export forces that same order in the map frame, so it holds either way.</p>
       <p><strong>Build and Export…</strong> opens the export dialog on what it just built; <strong>Build layers only</strong> stops there.</p>
     </section>
   </div>
@@ -208,7 +217,9 @@ AND "sunumber" IN ('1819', '1820', '1823', '1847')</code></pre>
       <p>Add a text item to your layout and type <code>Title</code> in it. That's the setup. The tool finds any label whose text is exactly that, rewrites it per phase, and puts <code>Title</code> back at the end. A label with the item id <code>phase_title</code> is always matched too.</p>
       <p><strong>Replace with:</strong> is a template. The default renders as <em>Field 6 - Space 34, Phase 1 (Construction)</em>:</p>
       <pre><code>{field} - Space {space}, Phase {phase} ({phase_name})</code></pre>
-      <p>Placeholders: <code>{field}</code>, <code>{space}</code>, <code>{phase}</code>, <code>{phase_name}</code>, <code>{layer}</code>, and <code>\n</code> for a line break.</p>
+      <p>Placeholders from a phase split: <code>{field}</code>, <code>{space}</code>, <code>{phase}</code>, <code>{phase_name}</code>. From a plan file: <code>{title}</code>, <code>{number}</code>, <code>{name}</code>, <code>{section}</code>, <code>{spaces}</code>. Either: <code>{layer}</code>, and <code>
+</code> for a line break.</p>
+      <p>Plan layers carry their own title, so the template for a plan set is just <code>{title}</code> — which is what the plan-file dialog sets when it hands over.</p>
     </section>
 
     <section class="step">
