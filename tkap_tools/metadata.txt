@@ -26,7 +26,7 @@ about=The TKAP QGIS tools. Three tools live under the TKAP Tools
     uncross itself before the polygon is built.
     .
     Licensed GPL-2.0-or-later. See LICENSE in the plugin folder.
-version=1.5.0
+version=1.6.1
 author=Andrew McGallian
 email=andymcgallian@gmail.com
 
@@ -41,7 +41,64 @@ experimental=False
 deprecated=False
 hasProcessingProvider=no
 
-changelog=1.5.0
+changelog=1.6.1
+    - Phasing: new "Plans from a Plan File..." action. Split by Phase derives the
+      plans from space_phase, which stops being the right answer as soon as a
+      publication plan is a hand-picked set - a space-phase minus six SUs, or
+      three spaces plus five loose SU numbers. Those decisions get made while
+      writing up, so this reads them from a text file: one "Map Title:" per plan,
+      with a query block per layer under it (a name ending FeaturesPlan or
+      SUsPlan, then the query). "-----" rules mark sections, "#" lines are notes,
+      and queries are applied exactly as written - the same string you would type
+      into the Query Builder.
+    - Each plan becomes a live filtered layer over the SU layer and another over
+      the Features layer, both named after the plan, in two groups. That is the
+      export dialog's first matching rule, so "Export Phase Plans" pairs them
+      with no naming convention to remember, and titles them from the plan file:
+      the layers carry their title, number, name and section, so {title} works in
+      a title template and is what the handover sets. "Build and Export..." goes
+      straight there; "Build layers only" stops at the layers, every one of them
+      still editable in the Query Builder.
+    - The plan file is checked against the layers before anything is built: one
+      row per plan with the SU and feature counts its queries actually select, a
+      query that will not run saying which attribute is missing, and a plan
+      selecting nothing flagged in red. The counts come from the very layers that
+      then get published, so the table is not an estimate. The queries name their
+      own columns, so the SU and Features layers are picked from the file rather
+      than guessed at by name.
+    - "Save a template to fill in..." writes a plan file with the format
+      explained in it, around two working example plans, and loads it.
+    - The source layers are only ever read. A plan is a separate layer over the
+      same source, read-only like the split tool's phase layers, and a rebuild
+      that would empty a group asks first and never touches the layers the
+      queries ran against.
+    - Plans are editable. "Plans are:" chooses what a plan layer is: editable
+      copies, the default, which hold their own copy of the features the query
+      selected - reshape a polygon for a figure and nothing can reach the
+      database, because a copy has no connection to it - or live filtered
+      layers, which track the source and keep an editable filter, and whose
+      edits are written to the source table. Both run the same query through the
+      provider, so they select the same SUs; the dialog spells out the
+      difference, in red for the live one. Either way the SU and Features layers
+      the queries ran against are still only ever read.
+    - Plan layers are named for the plan's title as written - "3.1 Hellenistic
+      Pitting and Abandonment", not "3_1_Hellenistic_Pitting_and_Abandonment". A
+      QGIS layer name has no characters to sanitise away, and the underscores
+      were reaching the exported title whenever a template fell back to the
+      layer name. Exported files are still sanitised, so the written file is
+      unchanged.
+    - The Features group is placed above the Plans group, and each plan's
+      features layer is put directly above its SUs in the map frame, so features
+      draw on top whether or not "Set map layers per phase" is ticked. Groups are
+      only reordered while empty, so no layer can be lost to it.
+    - Export Phase Plans: "Zoom map to phase extent" becomes a three-way Map
+      extent choice - as set in the layout, each plan's own extent, or one extent
+      for all the selected plans. The last keeps a publication sequence at one
+      scale and one registration, so leafing through the plans shows the site
+      changing rather than the frame moving. Whichever is chosen, the map's own
+      extent is now restored when the run finishes, which it was not before.
+
+    1.5.0
     - Fix: a saved section lost its photo backdrop. Reopening one that had been
       saved days earlier showed the drawing on a blank frame, and there was no
       way to get the photo back short of redrawing the section. The rectified

@@ -45,6 +45,14 @@ class TkapPhasingPlugin:
             ),
             self._action(
                 icon,
+                "Plans from a Plan File...",
+                "Build one plan per 'Map Title:' in a file of queries, then "
+                "export them",
+                self.run_plan_set,
+                parent,
+            ),
+            self._action(
+                icon,
                 "Export Phase Plans...",
                 "Export one plan per phase using a print layout you designed",
                 self.run_export,
@@ -75,6 +83,25 @@ class TkapPhasingPlugin:
         self.dialog.exec_()
         # Warnings are logged by the dialog itself, so they survive a run the
         # operator then cancels out of.
+
+    def run_plan_set(self):
+        from .plan_set_dialog import PlanSetDialog
+
+        # Rebuilt each time so the layer combos and the plan file are re-read.
+        self.dialog = PlanSetDialog(self.iface, self.iface.mainWindow())
+        self.dialog.exec_()
+
+        # 'Build and Export...' hands back what the export dialog should open
+        # on. Opened here, after the plan dialog's event loop has finished,
+        # rather than nested inside it.
+        request = getattr(self.dialog, "export_request", None)
+        if request:
+            from .export_dialog import ExportPlansDialog
+
+            self.dialog = ExportPlansDialog(
+                self.iface, self.iface.mainWindow(), preselect=request
+            )
+            self.dialog.exec_()
 
     def run_export(self):
         from .export_dialog import ExportPlansDialog

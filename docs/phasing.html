@@ -35,6 +35,7 @@
   <table>
     <tr><th>Action</th><th>What it does</th></tr>
     <tr><td>Split by Phase…</td><td>Builds the per-phase layers for one excavation field.</td></tr>
+    <tr><td>Plans from a Plan File…</td><td>Builds one plan per <code>Map Title:</code> in a file of queries you wrote, then exports them.</td></tr>
     <tr><td>Export Phase Plans…</td><td>Exports one plan per phase using a print layout you designed.</td></tr>
   </table>
   </div>
@@ -104,6 +105,76 @@
     </section>
   </div>
 
+  <h2>Tutorial: Plans from a Plan File</h2>
+
+  <p>Split by Phase derives the plans from the data. A publication plan is often not that: 3.2.3 is a space-phase <em>minus</em> six SUs, and 3.5.1 is three spaces <em>plus</em> five loose SU numbers. Those decisions get made while writing up, so this reads them from a text file — one plan per <code>Map Title:</code>, with the query that defines it — builds a layer per plan, and hands them to Export Phase Plans.</p>
+
+  <pre><code>------------------------------------------------------------
+Hellenistic Pitting and Abandonment
+------------------------------------------------------------
+
+Map Title: 3.1 Hellenistic Pitting and Abandonment
+
+Field3.1FeaturesPlan:
+"field" = '3' AND "feature" IN ('117', '120', '125', '144')
+
+Field3.1SUsPlan:
+"area" = '3'
+AND "sunumber" IN ('1819', '1820', '1823', '1847')</code></pre>
+
+  <div class="table-wrap">
+  <table>
+    <tr><th>Line</th><th>What it is</th></tr>
+    <tr><td><code>Map Title:</code></td><td>Starts a plan. The rest of the line is the title, which becomes the layout's title and the file name.</td></tr>
+    <tr><td><code>…SUsPlan:</code> / <code>…FeaturesPlan:</code></td><td>A query block. Only the ending matters — it says which layer to run the query against. The query goes on the line(s) under it and ends at a blank line.</td></tr>
+    <tr><td><code>------</code> rules</td><td>A section heading, for reading. Available as <code>{section}</code> in a title template.</td></tr>
+    <tr><td><code>#</code> lines</td><td>Notes, ignored. Comment out a plan rather than deleting a query you spent an afternoon getting right.</td></tr>
+  </table>
+  </div>
+
+  <p>Queries are used exactly as written — they are the provider filter, the same thing you would type into <strong>Layer Properties → Source → Query Builder</strong>. Test one there, paste it here. A plan may have both blocks or only one.</p>
+
+  <div class="steps">
+    <section class="step">
+      <h3>Open it</h3>
+      <p><strong>Plugins → TKAP Tools → Plans from a Plan File…</strong> Don't have a file yet? <strong>Save a template to fill in…</strong> writes one with the format explained in it and two working example plans, and loads it so you can see it working before changing a word.</p>
+    </section>
+
+    <section class="step">
+      <h3>Point it at your layers</h3>
+      <p>The queries name their own columns, so the tool reads them and picks the SU and Features layers that fit — override either. Leave Features empty to build SU plans only.</p>
+      <p>Both layers are only ever <strong>read</strong>. A plan is always a separate layer; nothing filters, renames or edits the ones you point at.</p>
+    </section>
+
+    <section class="step">
+      <h3>Read the table</h3>
+      <p>Every plan is listed with the number of SUs and features its queries actually select, checked against the layers you chose. A query that will not run says why — <em>layer 'Features' has no attribute 'sunumber'</em> tells you the two combo boxes are the wrong way round — and a plan selecting nothing is flagged in red before you export twenty of them.</p>
+    </section>
+
+    <section class="step">
+      <h3>Choose what a plan is</h3>
+      <p>Both modes run the same query, so they select the same SUs either way. What differs is where an edit to a plan goes.</p>
+      <div class="table-wrap">
+      <table>
+        <tr><th></th><th>Editable copies (default)</th><th>Live filtered layers</th></tr>
+        <tr><td>What it holds</td><td>its own copy of the selected features</td><td>a view of the source table</td></tr>
+        <tr><td>Editing</td><td>free, a copy has no connection to the database</td><td>writes <strong>to the source table</strong></td></tr>
+        <tr><td>Tracks the source</td><td>no, frozen at build</td><td>yes, live</td></tr>
+        <tr><td>Filter editable afterwards</td><td>no, fixed at build</td><td>yes, in the Query Builder</td></tr>
+        <tr><td>Survives closing QGIS</td><td>no, unless you save it</td><td>yes, as project layers</td></tr>
+      </table>
+      </div>
+      <p>Copies are the default because reshaping a polygon for a figure is a normal thing to want and should not be able to touch the excavation record. Live mode is there for when you do mean the edit to land in the database — the dialog says so in red when it is selected.</p>
+    </section>
+
+    <section class="step">
+      <h3>Build and export</h3>
+      <p>Each plan becomes a layer named after its title — <code>3.1 Hellenistic Pitting and Abandonment</code>, verbatim, since layer names have no characters to sanitise away. File names still come out safe: <code>3.1_Hellenistic_Pitting_and_Abandonment.jpg</code>.</p>
+      <p>They go into two groups: the SU plans in one, their features in the other, both taking the plan's name so Export Phase Plans pairs them automatically. The <strong>Features group sits above the Plans group</strong>, because a feature is cut into the SUs around it and has to draw on top — and the export forces that same order in the map frame, so features are on top either way.</p>
+      <p><strong>Build and Export…</strong> opens the export dialog on what it just built; <strong>Build layers only</strong> stops there.</p>
+    </section>
+  </div>
+
   <h2>Tutorial: Export Phase Plans</h2>
 
   <p>The tool doesn't invent a layout. Design one print layout in QGIS the way you want the plans to look, with north arrow, scale bar, legend and title block, and this walks the phase layers, showing one at a time, exporting a file for each.</p>
@@ -138,6 +209,11 @@
       <p><strong>Replace with:</strong> is a template. The default renders as <em>Field 6 - Space 34, Phase 1 (Construction)</em>:</p>
       <pre><code>{field} - Space {space}, Phase {phase} ({phase_name})</code></pre>
       <p>Placeholders: <code>{field}</code>, <code>{space}</code>, <code>{phase}</code>, <code>{phase_name}</code>, <code>{layer}</code>, and <code>\n</code> for a line break.</p>
+    </section>
+
+    <section class="step">
+      <h3>Choose what the map frame does</h3>
+      <p><strong>Map extent</strong> is one of three: leave it as set in the layout, zoom to each plan's own extent, or zoom once to all the selected plans together. The last is the one for a publication sequence — every plan comes out at the same scale and registration, so leafing through them shows the site changing rather than the frame moving. The map's own extent is put back when the run finishes.</p>
     </section>
 
     <section class="step">

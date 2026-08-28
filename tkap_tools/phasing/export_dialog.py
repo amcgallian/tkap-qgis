@@ -53,6 +53,7 @@ from .phasing_core import (
     phase_key_from_name,
     sanitise,
 )
+from .plan_file import tokens_from_layer
 
 PREVIEW_DPI = 96
 
@@ -72,6 +73,23 @@ SETTINGS_PREFIX = "tkap_phasing/export"
 #: A layout label with this item id is always treated as a title, whatever its
 #: text. Matching by text (see TITLE_MARKER_DEFAULT) is usually easier.
 TITLE_ITEM_ID = "phase_title"
+
+#: What the map frame does as the export walks the plans.
+#:
+#: ``combined`` is the one to reach for when the set is a publication sequence:
+#: every plan comes out at the same scale and the same registration, so leafing
+#: through them shows the site changing rather than the frame moving. ``each``
+#: fills the page with whatever that plan happens to cover, which is better for
+#: a single plan than for a series.
+EXTENT_LAYOUT = "layout"
+EXTENT_EACH = "each"
+EXTENT_COMBINED = "combined"
+
+EXTENT_MODES = (
+    (EXTENT_LAYOUT, "As set in the layout"),
+    (EXTENT_EACH, "Zoom to each plan's own extent"),
+    (EXTENT_COMBINED, "Zoom once to all selected plans"),
+)
 
 #: JPEG first -- it is the normal deliverable for TKAP phase plans.
 FORMATS = (
@@ -172,7 +190,8 @@ class PreviewDialog(QDialog):
 
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            with self.parent_dialog._phase_session(self.layout_obj) as apply:
+            session = self.parent_dialog._phase_session(self.layout_obj, self.layers)
+            with session as apply:
                 apply(layer)
                 exporter = QgsLayoutExporter(self.layout_obj)
                 image = exporter.renderPageToImage(0, QSize(), PREVIEW_DPI)
@@ -212,7 +231,14 @@ class PreviewDialog(QDialog):
 
 
 class ExportPlansDialog(QDialog):
-    def __init__(self, iface, parent=None):
+    """Walk a group of plan layers, exporting one file each from a print layout.
+
+    ``preselect`` is how *Plans from a Plan File* hands its work over: a dict of
+    ``group`` / ``feature_group`` / ``template`` / ``extent_mode``, applied over
+    the remembered settings so the dialog opens pointing at what was just built.
+    """
+
+    def __init__(self, iface, parent=None, preselect=None):
         super().__init__(parent)
         self.iface = iface
         self.setWindowTitle("Export Phase Plans")
@@ -223,6 +249,7 @@ class ExportPlansDialog(QDialog):
         self._connect()
         self._populate()
         self._restore_settings()
+        self._apply_preselect(preselect)
         fit_to_screen(self, 620, 900)
 
     # -- construction ------------------------------------------------------
@@ -299,8 +326,16 @@ class ExportPlansDialog(QDialog):
         self.layout_hint.setStyleSheet("QLabel { color: palette(mid); }")
         layout_form.addRow("", self.layout_hint)
 
-        self.zoom_check = QCheckBox("Zoom map to phase extent")
-        layout_form.addRow("", self.zoom_check)
+        self.extent_combo = QComboBox()
+        for value, label in EXTENT_MODES:
+            self.extent_combo.addItem(label, value)
+        self.extent_combo.setToolTip(
+            "'Zoom once to all selected plans' keeps every plan in the set at "
+            "one scale and one registration, so the sequence can be compared "
+            "page to page.\n"
+            "The map's own extent is put back when the run finishes."
+        )
+        layout_form.addRow("Map extent:", self.extent_combo)
 
         self.title_check = QCheckBox("Replace title text")
         self.title_check.setChecked(True)
@@ -317,8 +352,9 @@ class ExportPlansDialog(QDialog):
         layout_form.addRow("Replace with:", self.template_edit)
 
         placeholders = QLabel(
-            "{field}  {space}  {phase}  {phase_name}  {layer}"
-            "     - use \\n for a line break"
+            "From a phase split:  {field}  {space}  {phase}  {phase_name}\n"
+            "From a plan file:  {title}  {number}  {name}  {section}\n"
+            "Either:  {layer}     - use \\n for a line break"
         )
         placeholders.setStyleSheet("QLabel { color: palette(mid); }")
         layout_form.addRow("", placeholders)
@@ -548,6 +584,16 @@ class ExportPlansDialog(QDialog):
 
     def _naming_guide(self, phase_layers):
         """Spell out how to name the feature layers, using a real example."""
+        # A set built from a plan file is already named for you, and its names
+        # carry no Sp/Phase tokens, so the space-phase advice would misdirect.
+        plans = [layer for layer in phase_layers if tokens_from_layer(layer)]
+        if plans and len(plans) == len(phase_layers):
+            return (
+                "These layers came from a plan file, so their features layers "
+                f"are already named to match ({plans[0].name()}). Point the "
+                "group above at the Features group that was built with them."
+            )
+
         example = ""
         for layer in phase_layers:
             key = phase_key_from_name(layer.name())
@@ -725,12 +771,55 @@ class ExportPlansDialog(QDialog):
                 f"{SETTINGS_PREFIX}/feature_legend_name", DEFAULT_FEATURE_LEGEND_NAME
             )
         )
+        index = self.extent_combo.findData(
+            settings.value(f"{SETTINGS_PREFIX}/extent_mode", EXTENT_LAYOUT)
+        )
+        if index >= 0:
+            self.extent_combo.setCurrentIndex(index)
         # Only reselect a features group that still exists in this project.
         index = self.feature_group_combo.findData(
             settings.value(f"{SETTINGS_PREFIX}/feature_group", None)
         )
         if index > 0:
             self.feature_group_combo.setCurrentIndex(index)
+
+    def _apply_preselect(self, preselect):
+        """Point the dialog at a set another dialog has just built.
+
+        Applied over the remembered settings, and only for the keys given, so
+        everything the operator has set up for their own exports -- folder,
+        format, DPI, legend names -- survives being handed a new set.
+        """
+        if not preselect:
+            return
+
+        for key, combo in (
+            ("group", self.group_combo),
+            ("feature_group", self.feature_group_combo),
+        ):
+            if key not in preselect:
+                continue
+            index = combo.findData(preselect[key])
+            if index >= 0:
+                combo.setCurrentIndex(index)
+
+        if preselect.get("extent_mode"):
+            index = self.extent_combo.findData(preselect["extent_mode"])
+            if index >= 0:
+                self.extent_combo.setCurrentIndex(index)
+
+        template = preselect.get("template")
+        if template:
+            # Only if the remembered template says nothing about a plan: an
+            # operator who has written '{number} - {name}' meant it.
+            current = self.template_edit.text()
+            if not any(
+                token in current
+                for token in ("{title}", "{number}", "{name}", "{section}")
+            ):
+                self.template_edit.setText(template)
+
+        self._update_title_example()
 
     def _store_settings(self):
         settings = QgsSettings()
@@ -755,6 +844,9 @@ class ExportPlansDialog(QDialog):
         )
         settings.setValue(
             f"{SETTINGS_PREFIX}/feature_legend_name", self.feature_legend_edit.text()
+        )
+        settings.setValue(
+            f"{SETTINGS_PREFIX}/extent_mode", self.extent_combo.currentData()
         )
 
     def _pick_folder(self):
@@ -846,14 +938,20 @@ class ExportPlansDialog(QDialog):
         return found
 
     def _tokens_for(self, layer):
-        """Title placeholders for one phase layer.
+        """Title placeholders for one plan layer.
 
         Prefers the ph_space / ph_num / ph_name provenance columns, falling back
         to parsing the layer name if they were switched off during the split.
+
+        A layer built from a plan file carries its own title, number, name and
+        section as custom properties, and those are added too -- so ``{title}``
+        writes the line the excavator wrote in the plan file, while the phase
+        placeholders keep working for a layer that has both.
         """
         from qgis.core import QgsFeatureRequest
 
         tokens = parse_layer_name(layer.name())
+        tokens.update(tokens_from_layer(layer))
         try:
             fields = layer.fields()
             names = ("ph_space", "ph_num", "ph_name")
@@ -870,12 +968,32 @@ class ExportPlansDialog(QDialog):
             pass
         return tokens
 
+    def _plan_extent(self, layers, pairs):
+        """Union of every plan's extent, for the one-scale-for-the-set mode."""
+        combined = None
+        for layer in layers:
+            for entry in (layer, pairs.get(layer.id())):
+                if entry is None:
+                    continue
+                if entry is not layer and entry.crs() != layer.crs():
+                    continue
+                extent = entry.extent()
+                if extent.isEmpty():
+                    continue
+                if combined is None:
+                    combined = QgsRectangle(extent)
+                else:
+                    combined.combineExtentWith(extent)
+        return combined
+
     @contextmanager
-    def _phase_session(self, layout):
+    def _phase_session(self, layout, layers=None):
         """Snapshot project/layout state, yield an apply function, then restore.
 
         Preview and export drive exactly the same code, so what you see in the
-        preview is what lands on disk.
+        preview is what lands on disk. ``layers`` is the run's full set, needed
+        up front for the combined-extent mode -- one zoom for the whole set has
+        to be computed before the first plan is drawn.
         """
         root = QgsProject.instance().layerTreeRoot()
         hide_others = self.hide_others_check.isChecked()
@@ -908,6 +1026,19 @@ class ExportPlansDialog(QDialog):
             map_item = maps[0] if maps else None
 
         legends = [i for i in layout.items() if isinstance(i, QgsLayoutItemLegend)]
+
+        # Extent: captured before anything moves the frame and put back in the
+        # finally below, so a run leaves the layout where the operator had it.
+        extent_mode = self.extent_combo.currentData() or EXTENT_LAYOUT
+        original_extent = None
+        combined_extent = None
+        if map_item is not None and extent_mode != EXTENT_LAYOUT:
+            original_extent = QgsRectangle(map_item.extent())
+            if extent_mode == EXTENT_COMBINED:
+                combined_extent = self._plan_extent(
+                    self._checked_layers() if layers is None else layers,
+                    feature_pairs,
+                )
 
         # Captured before anything is renamed, so restoration is exact even if
         # the run aborts part-way.
@@ -1022,7 +1153,7 @@ class ExportPlansDialog(QDialog):
                         group.insertLayer(position, entry)
                         inserted_layer_ids[index].append(entry.id())
 
-            if self.zoom_check.isChecked() and map_item is not None:
+            if map_item is not None and extent_mode == EXTENT_EACH:
                 extent = layer.extent()
                 if companion is not None and companion.crs() == layer.crs():
                     companion_extent = companion.extent()
@@ -1031,6 +1162,11 @@ class ExportPlansDialog(QDialog):
                         extent.combineExtentWith(companion_extent)
                 if not extent.isEmpty():
                     map_item.zoomToExtent(extent)
+            elif map_item is not None and combined_extent is not None:
+                # Re-applied per plan rather than once before the loop: setting
+                # the map's layers can move the frame, and every plan in the set
+                # must come out on the same one.
+                map_item.zoomToExtent(combined_extent)
 
             # An auto-updating legend follows the layer tree, but it only
             # rebuilds when told to -- otherwise the exported legend can lag a
@@ -1066,6 +1202,8 @@ class ExportPlansDialog(QDialog):
             if set_map:
                 map_item.setLayers(original_map_layers)
                 map_item.setKeepLayerSet(original_keep_layer_set)
+            if map_item is not None and original_extent is not None:
+                map_item.setExtent(original_extent)
             for layer_id, original_name in original_names.items():
                 restored = QgsProject.instance().mapLayer(layer_id)
                 if restored is not None:
@@ -1092,7 +1230,7 @@ class ExportPlansDialog(QDialog):
         QApplication.setOverrideCursor(Qt.WaitCursor)
 
         try:
-            with self._phase_session(layout) as apply:
+            with self._phase_session(layout, layers) as apply:
                 for index, layer in enumerate(layers):
                     name = names[layer.id()]
                     self.progress.setValue(index + 1)

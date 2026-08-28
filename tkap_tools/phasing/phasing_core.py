@@ -354,6 +354,24 @@ def sql_identifier(name: str) -> str:
     return '"' + str(name).replace('"', '""') + '"'
 
 
+def combine_filters(existing: str, query: str) -> str:
+    """AND a hand-written query onto whatever filter a layer already carries.
+
+    With no existing filter the query is returned **verbatim** -- a plan file's
+    queries are written and tested in the Query Builder, and a plan layer should
+    open there showing exactly what was written, not a reformatted equivalent.
+    Only when both are present does either get bracketed, which is the one case
+    where precedence could otherwise change the result (an existing filter of
+    ``a OR b`` ANDed with the query is not ``a OR (b AND query)``).
+    """
+    left, right = coerce_text(existing), coerce_text(query)
+    if not left:
+        return right
+    if not right:
+        return left
+    return f"({left}) AND ({right})"
+
+
 def phase_clause(space_phase_field: str, key: PhaseKey) -> str:
     """SQL matching SUs listed for one ``(space, phase)``.
 
@@ -821,6 +839,54 @@ def build_filtered_layer(
         # Set last: addExpressionField on a read-only layer can be refused.
         layer.setReadOnly(True)
     return layer, subset
+
+
+def build_query_layer(
+    source_layer,
+    name: str,
+    query: str,
+    properties: Optional[Dict[str, str]] = None,
+    inherit_style: bool = True,
+    read_only: bool = True,
+):
+    """Live layer over the same source, filtered by a hand-written query.
+
+    The sibling of :func:`build_filtered_layer` for plans whose membership is
+    decided by the excavator rather than derived from ``space_phase``: the query
+    arrives from a plan file and is applied as the provider filter unchanged.
+    Returns ``(layer, subset, error)``; ``layer`` is ``None`` when the provider
+    would not take the filter, and ``error`` says which way it failed.
+
+    ``properties`` are written as layer custom properties -- that is how a plan
+    layer carries its title through to the export dialog, and they are saved
+    with the project, so a plan set survives closing QGIS.
+
+    Read-only for the same reason as the phase layers: this addresses the *same*
+    table as the source, so an edit session started on it would write to the
+    production database. The filter itself stays editable in the Query Builder.
+    """
+    from qgis.core import QgsVectorLayer
+
+    subset = combine_filters(source_layer.subsetString(), query)
+
+    layer = QgsVectorLayer(source_layer.source(), name, source_layer.providerType())
+    if not layer.isValid():
+        return None, subset, "the source could not be reopened"
+
+    # setSubsetString replaces whatever filter came in via the source URI, which
+    # is why any pre-existing filter is folded into `subset` above.
+    if not layer.setSubsetString(subset):
+        return None, subset, "the provider rejected the query"
+
+    if inherit_style:
+        copy_style(source_layer, layer)
+    for key, value in (properties or {}).items():
+        layer.setCustomProperty(key, value)
+    if read_only:
+        # Set last, mirroring build_filtered_layer: a read-only layer can refuse
+        # later modification.
+        layer.setReadOnly(True)
+    return layer, subset, ""
 
 
 def write_layers_to_geopackage(
