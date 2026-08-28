@@ -321,11 +321,9 @@ def _photo_block(session, placed_abs: str, placed_rel: str) -> dict:
         # anything but Windows.
         "placed": Path(placed_rel).as_posix() if placed_rel else "",
         "placed_abs": placed_abs,
-        "separation": float(getattr(session, "photo_separation", 0.0) or 0.0),
-        # Deliberately duplicates extra["height_datum"]: that one is what the
-        # drawing is on, this one is what the fit was actually computed with, and
-        # holding both is what lets a later reader notice they disagree instead
-        # of assuming they do not.
+        # Kept for older readers, and always the same two values now: every
+        # section is drawn in ellipsoidal heights with nothing converted.
+        "separation": 0.0,
         "datum": session.line.height_datum,
     }
     if fit is not None:
@@ -479,6 +477,9 @@ class PhotoResolution:
     source: str = ""
     fit: object = None
     points: list = field(default_factory=list)
+    #: What a section saved before heights were settled was fitted with.
+    #: Nothing applies it any more; it is read so a re-placement can say the
+    #: drawing was built on an offset that no longer exists.
     separation: float = 0.0
     #: Plain English, for the message bar.
     how: str = ""
@@ -564,8 +565,9 @@ def line_from_metadata(meta: dict) -> SectionLine:
         buffer=float(meta.get("buffer") or 0.25),
         flipped=bool(meta.get("flipped")),
     )
-    # Sections saved before the datum was a choice were all drawn on the
-    # database's orthometric altitudes, so that is what nothing recorded means.
+    # Read as saved rather than forced: a section drawn before heights were
+    # settled may say orthometric, and the caller warns about that rather than
+    # relabelling the axis under a drawing that was not made on it.
     line.height_datum = (
         (meta.get("extra") or {}).get("height_datum") or "orthometric"
     )

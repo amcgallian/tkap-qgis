@@ -165,13 +165,12 @@ class TkapSectionPlugin:
 
         if dialog.photo_path and dialog.fit is not None:
             try:
-                # The points and the separation are handed over with the fit so
-                # the placement can be redone later without the user picking
-                # every control point again.
+                # The points are handed over with the fit so the placement
+                # can be redone later without the user picking every control
+                # point again.
                 session.attach_photo(
                     dialog.photo_path, dialog.fit,
                     points=dialog.control_points,
-                    separation=dialog.separation(),
                 )
             except Exception as exc:
                 self._log(f"Photo placement failed: {exc}")
@@ -405,7 +404,6 @@ class TkapSectionPlugin:
         session.photo_placed = res.placed or (meta.get("photo_placed") or "")
         session.photo_fit = res.fit
         session.photo_points = res.points
-        session.photo_separation = res.separation
 
         if res.placed:
             try:
@@ -427,13 +425,23 @@ class TkapSectionPlugin:
                 self._log(f"Could not load the placed photo {res.placed}: {exc}")
 
         if res.can_replace:
+            if res.separation:
+                # An old section, fitted when heights could be shifted onto the
+                # other datum. Re-placing it now applies no shift, so the photo
+                # will land where the raw survey puts it -- which is right, and
+                # is not where this section was drawn.
+                self.iface.messageBar().pushMessage(
+                    PLUGIN_NAME,
+                    f"This section's photo was placed with a {res.separation:.3f} m "
+                    "height offset. Offsets are gone - heights are used as "
+                    "surveyed - so re-placing it may move the backdrop against "
+                    "the units. Check it before saving.",
+                    level=Qgis.Warning, duration=15,
+                )
             try:
                 QApplication.setOverrideCursor(Qt.WaitCursor)
                 try:
-                    session.attach_photo(
-                        res.source, res.fit,
-                        points=res.points, separation=res.separation,
-                    )
+                    session.attach_photo(res.source, res.fit, points=res.points)
                 finally:
                     QApplication.restoreOverrideCursor()
                 self.iface.messageBar().pushMessage(

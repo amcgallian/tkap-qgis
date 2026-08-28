@@ -26,7 +26,7 @@ about=The TKAP QGIS tools. Three tools live under the TKAP Tools
     uncross itself before the polygon is built.
     .
     Licensed GPL-2.0-or-later. See LICENSE in the plugin folder.
-version=1.6.2
+version=1.6.3
 author=Andrew McGallian
 email=andymcgallian@gmail.com
 
@@ -41,7 +41,26 @@ experimental=False
 deprecated=False
 hasProcessingProvider=no
 
-changelog=1.6.2
+changelog=1.6.3
+    - Section Drawing: heights are ellipsoidal, full stop. "Heights on the
+      drawing", "Gap between the two" and "Work it out from a known height..."
+      are gone from the setup dialog, and nothing is converted anywhere - not
+      the control points, not the recorded SU altitudes the seed boxes come
+      from. A section is drawn in the height the receiver measured. The choice
+      existed because an orthometric height is only as good as the geoid model
+      behind it; the answer was always the raw one, and the controls only ever
+      offered a way to get it wrong.
+    - What is left is one sentence, when it is needed: a control-point file
+      exported with a geoid model set has its Elevation column filled instead of
+      the ellipsoidal one and reads about 36 m low. The loader says so and the
+      pre-flight checklist repeats it. The fix is to re-export on Global CS -
+      there is nothing to correct in the dialog.
+    - Opening an existing section is unaffected: its backdrop is reloaded as it
+      was drawn, and its saved height datum is read as saved rather than
+      relabelled. A section that was placed with a non-zero gap and now needs
+      its photo re-placed says so before it moves anything.
+
+    1.6.2
     - Plans from a Plan File: spaces. Pick a Spaces layer and the column holding
       the space number, and every plan gets a third layer alongside its SUs and
       features. The query is usually not written at all: an SU query filtering

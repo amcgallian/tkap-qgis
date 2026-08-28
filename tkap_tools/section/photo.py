@@ -6,14 +6,13 @@ Three separable problems, deliberately kept apart:
    Elevation empty when the receiver is left on "Global CS", filling only
    Longitude/Latitude/Ellipsoidal height. Both layouts occur, so the loader
    handles either.
-2. **Getting onto the right vertical datum.** A section is drawn in one vertical
-   datum and everything has to arrive on it: the DB records orthometric heights,
-   a Global-CS export gives ellipsoidal. At TKAP those differ by about 36 m, so
-   mixing them silently would put the photo 36 m above the SUs. PROJ cannot help
-   here -- no geoid grid is installed, and it passes the height through
-   unchanged rather than failing -- so the separation is an explicit,
-   calibratable number, and which datum the drawing works in is a choice rather
-   than an assumption.
+2. **Heights.** Everything is ellipsoidal -- the height the receiver actually
+   measures -- and nothing is ever converted. An orthometric height is only as
+   good as the geoid model behind it, and PROJ cannot check one here: no geoid
+   grid is installed, so it passes the height through unchanged rather than
+   failing. So there is no second datum, no separation and no choice to get
+   wrong. A file exported with a geoid model set reads about 36 m low; the
+   loader says so, and the fix is to re-export it on Global CS.
 3. **Fitting a transform.** A Metashape ortho of a wall arrives already metric
    and 1:1, so a similarity (or even a translation) fits it, and the result can
    be written as a plain geotransform with no resampling at all. A raw handheld
@@ -33,14 +32,23 @@ import numpy as np
 
 from .section_geom import SectionLine
 
-#: Geoid-ellipsoid separation at Turkmen-Karahoyuk (37.62 N, 33.03 E).
-#: EGM2008 over the Konya plain is about +36 m; the value implied by comparing
-#: this site's ellipsoidal GCPs against its orthometric SU altitudes is 35.9.
-#: Only used as a starting guess -- see :func:`calibrate_separation`.
-DEFAULT_GEOID_SEPARATION = 35.9
+#: How far this site's ellipsoidal heights sit above its orthometric ones
+#: (37.62 N, 33.03 E): EGM2008 over the Konya plain is about +36 m, and the
+#: value implied by comparing TKAP's ellipsoidal GCPs against its orthometric SU
+#: altitudes is 35.9. Nothing applies it -- sections are drawn in ellipsoidal
+#: heights and convert nothing. It is here to size the error in the message a
+#: mis-exported control-point file gets.
+GEOID_SEPARATION = 35.9
 
 
 class HeightDatum(Enum):
+    """Which column a control point's height came out of.
+
+    Not a choice about the drawing -- sections are always ellipsoidal. This
+    records what a *file* turned out to hold, so one exported on the wrong
+    receiver setup can be named rather than silently placed 36 m low.
+    """
+
     ORTHOMETRIC = "orthometric"    # what the SU altitude_* columns hold
     ELLIPSOIDAL = "ellipsoidal"    # what a Global-CS Emlid export holds
 
@@ -52,14 +60,15 @@ class HeightDatum(Enum):
         }[self]
 
 
-#: The datum a section works in unless it is told otherwise.
-#:
-#: Ellipsoidal, because it is the height the receiver actually measures. An
-#: orthometric height is only ever as good as the geoid model that produced it,
-#: and a receiver carrying the wrong model -- or none -- hands over a
-#: plausible-looking height that is quietly wrong, which is what soured the
-#: orthometric readings this site has been working from. A raw ellipsoidal
-#: height has no such dependency: it is wrong only if the fix is wrong.
+#: The datum every section works in. Not a choice: an orthometric height is
+#: only ever as good as the geoid model behind it, and a receiver carrying the
+#: wrong model -- or none -- hands over a plausible-looking height that is
+#: quietly wrong. A raw ellipsoidal height has no such dependency, so that is
+#: what sections are drawn in, always. Nothing is converted anywhere.
+HEIGHT_DATUM = "ellipsoidal"
+
+#: Kept as the fallback when reading a saved control point that recorded no
+#: datum of its own. Every section works in :data:`HEIGHT_DATUM`.
 DEFAULT_WORKING_DATUM = HeightDatum.ELLIPSOIDAL
 
 
@@ -94,7 +103,10 @@ class ControlPoint:
     name: str
     easting: float
     northing: float
-    height: float                       # in whatever datum ``datum`` says
+    height: float                       # ellipsoidal, as surveyed
+    #: Which column the height came out of. Nothing is converted -- this only
+    #: drives the note the loader emits, so a file exported on the wrong
+    #: receiver setup is visible rather than silently 36 m out.
     datum: HeightDatum = HeightDatum.ELLIPSOIDAL
     #: Pixel location, origin top-left, row increasing downward -- the
     #: convention the user is clicking in. None until picked.
@@ -107,34 +119,14 @@ class ControlPoint:
     def is_picked(self) -> bool:
         return self.pixel_x is not None and self.pixel_y is not None
 
-    def height_in(self, datum: HeightDatum, separation: float) -> float:
-        """This point's height expressed on ``datum``.
-
-        ``separation`` is the geoid separation N = ellipsoidal - orthometric, so
-        it is added climbing onto the ellipsoid and taken off coming back down.
-        A point already on the datum asked for is returned untouched, whatever
-        the separation says -- which is what makes working in ellipsoidal
-        heights free of any dependence on a geoid model.
-        """
-        if self.datum is datum:
-            return self.height
-        if datum is HeightDatum.ORTHOMETRIC:
-            return self.height - separation
-        return self.height + separation
-
-    def section_xy(
-        self, line: SectionLine, separation: float, datum: HeightDatum
-    ) -> tuple[float, float]:
+    def section_xy(self, line: SectionLine) -> tuple[float, float]:
         """Where this point lands in section space.
 
         The plan position is projected onto the trace, which is exactly the
         "smush the wall onto a plane" step -- perpendicular wander is discarded.
         Use :meth:`offset_from` to see how much was discarded.
         """
-        return (
-            line.chainage(self.easting, self.northing),
-            self.height_in(datum, separation),
-        )
+        return line.chainage(self.easting, self.northing), self.height
 
     def offset_from(self, line: SectionLine) -> float:
         """Signed perpendicular distance from the trace, in metres."""
@@ -159,9 +151,10 @@ def load_emlid_csv(
     """Read an Emlid Reach survey export.
 
     Returns the points and a list of human-readable notes about what had to be
-    inferred -- which datum was found, whether coordinates came from the
-    projected or the geographic columns. Those notes are surfaced in the dialog
-    rather than buried, because getting the datum wrong is a 36 m error that
+    inferred -- which height column was found, whether coordinates came from the
+    projected or the geographic ones. Heights are used exactly as they arrive.
+    The note about which column they came from is surfaced rather than buried,
+    because a file exported with a geoid model set reads about 36 m low and
     still looks plausible on screen.
 
     ``transform_lonlat`` is a callable (lon, lat) -> (easting, northing) used
@@ -216,14 +209,16 @@ def load_emlid_csv(
             "Easting/Northing were empty; coordinates converted from "
             "Longitude/Latitude."
         )
-    if datum is HeightDatum.ELLIPSOIDAL:
+    if datum is not HeightDatum.ELLIPSOIDAL:
+        # Not converted -- said out loud. Sections are drawn in ellipsoidal
+        # heights, so a file off a receiver with a geoid model set will place
+        # about 36 m low. Re-export it on Global CS.
         notes.append(
-            "Heights are ELLIPSOIDAL (the 'Elevation' column was empty, so the "
-            "receiver was on Global CS). At this site they read about 36 m "
-            "above the SU table's orthometric altitudes."
+            "These heights came from the 'Elevation' column, which means the "
+            "receiver had a geoid model set. Sections are drawn in ellipsoidal "
+            "heights, so this file will sit about 36 m low - re-export it with "
+            "the receiver on Global CS."
         )
-    else:
-        notes.append("Heights read from the 'Elevation' column as orthometric.")
     notes.append(f"{len(points)} control points read from {path.name}.")
     return points, notes
 
@@ -256,48 +251,6 @@ def select_for_section(
         near = abs(p.offset_from(line)) <= tol and -tol <= chain <= line.length + tol
         (on if near else off).append(p)
     return on, off
-
-
-def calibrate_separation(
-    points: list[ControlPoint], known_orthometric_top: float
-) -> float:
-    """Geoid separation implied by a known orthometric elevation.
-
-    The practical calibration: take the highest control point on the wall, which
-    is the top of the section, and compare it against the SU altitude the
-    database already records for the top of that wall.
-
-    Only ellipsoidal points can measure a separation. Orthometric ones are
-    already on the database's datum, so the difference they show is survey error
-    rather than the geoid, and reading it as a separation would bake that error
-    into every height on the drawing.
-    """
-    if not points:
-        raise ValueError("No control points to calibrate against")
-    if all(p.datum is HeightDatum.ORTHOMETRIC for p in points):
-        raise ValueError(
-            "These control points are already orthometric, so there is no "
-            "separation to work out from them. A separation can only be "
-            "measured against ellipsoidal (Global CS) heights."
-        )
-    highest = max(p.height for p in points)
-    return highest - known_orthometric_top
-
-
-def suggest_separation(points: list[ControlPoint]) -> float | None:
-    """A separation guess from the heights alone.
-
-    Rounds the gap between the observed heights and the site's known
-    orthometric band to the nearest 0.1 m. Crude, and only used to pre-fill the
-    spinbox so the user has something sane to adjust.
-    """
-    if not points:
-        return None
-    if all(p.datum is HeightDatum.ORTHOMETRIC for p in points):
-        return 0.0
-    top = max(p.height for p in points)
-    # TKAP orthometric ground surface runs about 1029-1035 m.
-    return round(top - 1032.0, 1) if top > 1050 else 0.0
 
 
 # ------------------------------------------------------------------- fitting --
@@ -487,17 +440,14 @@ def fit_transform(
     points: list[ControlPoint],
     line: SectionLine,
     *,
-    separation: float,
     image_height: int,
     image_width: int = 0,
     model: FitModel | None = None,
-    datum: HeightDatum = DEFAULT_WORKING_DATUM,
 ) -> Fit:
     """Fit pixel -> section space and measure how well it worked.
 
-    ``datum`` is the vertical datum the section works in; control points are
-    converted onto it before anything is fitted, so the photo lands on the same
-    axis as the units.
+    Control-point heights are used exactly as surveyed, which is what puts the
+    photo on the same axis as the units: both are ellipsoidal.
 
     Residuals are reported in metres in section space, which is the unit the
     archaeologist actually cares about: a 3 cm residual is a 3 cm error on the
@@ -512,9 +462,7 @@ def fit_transform(
         )
 
     src = _to_y_up(usable, image_height)
-    dst = np.array(
-        [p.section_xy(line, separation, datum) for p in usable], dtype=float
-    )
+    dst = np.array([p.section_xy(line) for p in usable], dtype=float)
     matrix = _FITTERS[chosen](src, dst)
 
     fit = Fit(
@@ -523,7 +471,7 @@ def fit_transform(
     )
     total = 0.0
     for p, (px, py) in zip(usable, src):
-        want = np.array(p.section_xy(line, separation, datum))
+        want = np.array(p.section_xy(line))
         got = np.array(fit.apply(px, py))
         err = float(np.hypot(*(got - want)))
         p.residual = err
@@ -538,7 +486,7 @@ def fit_transform(
     for p in points:
         if p not in usable and p.is_picked:
             px, py = p.pixel_x, image_height - p.pixel_y
-            want = np.array(p.section_xy(line, separation, datum))
+            want = np.array(p.section_xy(line))
             p.residual = float(np.hypot(*(np.array(fit.apply(px, py)) - want)))
 
     return fit

@@ -874,7 +874,6 @@ class SectionPanel(QDockWidget):
                 session.attach_photo(
                     path, session.photo_fit,
                     points=session.photo_points,
-                    separation=session.photo_separation,
                 )
             finally:
                 QApplication.restoreOverrideCursor()
@@ -952,7 +951,6 @@ class SectionPanel(QDockWidget):
                 self.session.attach_photo(
                     photo, fit,
                     points=dialog.result_points(),
-                    separation=self.session.photo_separation,
                 )
             finally:
                 QApplication.restoreOverrideCursor()

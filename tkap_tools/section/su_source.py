@@ -511,7 +511,6 @@ def apply_seed_cascade(
     *,
     strat_floor: dict[int, float] | None = None,
     use_recorded_elevations: bool = False,
-    height_offset: float = 0.0,
     min_box_height: float = 0.05,
 ) -> None:
     """Set each candidate's vertical extent for seeding.
@@ -530,16 +529,11 @@ def apply_seed_cascade(
     2. one altitude -> box down to the strat floor, or to the section edge
     3. nothing -> full-height column
 
-    ``height_offset`` is added to every recorded altitude and every strat floor
-    before it is used. The database records orthometric heights; a section
-    working in ellipsoidal ones needs the geoid separation added to bring them
-    onto its axis, or the boxes seed 36 m below the photo. It is 0 when the
-    section works in the datum the database uses.
-
-    Mutates the candidates in place. ``line`` must already have its vertical
+    Recorded altitudes and strat floors are used exactly as the database holds
+    them. Mutates the candidates in place. ``line`` must already have its vertical
     extent set. ``alt_min``/``alt_max`` end up holding the *seed box*, so the
-    values as recorded are kept in ``recorded_min``/``recorded_max`` for display
-    -- as recorded, meaning on the database's datum, offset or no offset.
+    values as recorded are kept in ``recorded_min``/``recorded_max`` for
+    display.
     """
     if line.z_min is None or line.z_max is None:
         raise ValueError("Set the section's vertical extent before seeding")

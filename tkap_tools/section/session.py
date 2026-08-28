@@ -256,9 +256,6 @@ class SectionSession:
     photo_fit: Fit | None = field(init=False, default=None)
     #: The control points behind that fit, kept so a re-pick starts pre-filled.
     photo_points: list = field(init=False, default_factory=list)
-    #: The geoid separation those points were fitted with. Refitting without it
-    #: would silently move an ellipsoidal survey by about 36 m.
-    photo_separation: float = field(init=False, default=0.0)
     #: Where this session was last saved, so Save can overwrite without asking.
     saved_to: str = field(init=False, default="")
 
@@ -703,15 +700,14 @@ class SectionSession:
         fit: Fit,
         *,
         points: list | None = None,
-        separation: float = 0.0,
         workdir: Path | None = None,
     ) -> str:
         """Place the photo into section space and load it under the polygons.
 
-        ``points`` and ``separation`` are what produced ``fit``. They are not
-        needed to do the placement -- they are recorded so a section that later
-        loses its backdrop can have it put back without the control points
-        being picked all over again.
+        ``points`` are what produced ``fit``. They are not needed to do the
+        placement -- they are recorded so a section that later loses its
+        backdrop can have it put back without the control points being picked
+        all over again.
         """
         out = self._placed_path(source_path, workdir)
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -749,7 +745,6 @@ class SectionSession:
         self.photo_placed = str(out)
         self.photo_fit = fit
         self.photo_points = list(points or [])
-        self.photo_separation = float(separation)
         return str(out)
 
     def reload_placed_photo(self, placed_path: str) -> None:

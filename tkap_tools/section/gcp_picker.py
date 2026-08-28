@@ -3,7 +3,7 @@
 Pulled out of the setup dialog so that *re-linking* a saved section's backdrop
 can reuse it. That is not a tidiness argument. A re-link happens to a section
 that is already drawn, so the one thing it must not do is change the section:
-the trace, the flip, the datum and the vertical extent are all baked into the
+the trace, the flip and the vertical extent are all baked into the
 polygons on disk, and moving any of them silently invalidates the drawing.
 
 The setup dialog can change all of those, and does -- a fit landing there fans
@@ -15,8 +15,7 @@ never writes to it, and everything that does write lives in the dialog on the
 other side of :attr:`GcpPickerWidget.fitChanged`.
 
 :attr:`GcpPickerWidget.extra_layout` is an empty slot in the right-hand column,
-where the setup dialog puts its datum controls and a relink puts a read-only
-statement of the datum it is stuck with.
+where the setup dialog puts anything else it needs beside the picker.
 """
 
 from __future__ import annotations
@@ -44,16 +43,13 @@ from qgis.PyQt.QtWidgets import (
 
 from .gcp_view import PhotoView, PlacedPreview
 from .photo import (
-    DEFAULT_WORKING_DATUM,
     ControlPoint,
     Fit,
     FitModel,
-    HeightDatum,
     best_model_for,
     fit_transform,
     load_emlid_csv,
     select_for_section,
-    suggest_separation,
 )
 from .section_geom import SectionLine
 
@@ -94,9 +90,7 @@ class GcpPickerWidget(QWidget):
     #: What the control-point file had to say about itself, for the host to
     #: show wherever it keeps its notes.
     notesChanged = pyqtSignal(str)
-    #: An ellipsoidal file implies a geoid separation. Offered rather than
     #: applied, because only the host knows whether it is free to change it.
-    separationSuggested = pyqtSignal(float)
 
     def __init__(self, line: SectionLine, parent=None) -> None:
         super().__init__(parent)
@@ -108,8 +102,6 @@ class GcpPickerWidget(QWidget):
         self.photo_path: str | None = None
         self.image_size: tuple[int, int] = (0, 0)
         self._picking_row: int | None = None
-        self._datum: HeightDatum = DEFAULT_WORKING_DATUM
-        self._separation: float = 0.0
 
         self._build_ui()
 
@@ -199,7 +191,7 @@ class GcpPickerWidget(QWidget):
         rlayout.addLayout(gcp_row)
 
         #: Whatever the host needs between the pick buttons and the table: the
-        #: datum controls when setting a section up, a read-only statement of
+        #: whatever else the host dialog wants beside the picker -- the
         #: them when re-linking one that is already drawn.
         self.extra_layout = QVBoxLayout()
         rlayout.addLayout(self.extra_layout)
@@ -237,10 +229,6 @@ class GcpPickerWidget(QWidget):
 
     # ------------------------------------------------------ host -> the widget --
 
-    def set_datum(self, datum: HeightDatum, separation: float) -> None:
-        """Say which datum to convert control points onto, and refit."""
-        self._datum = datum
-        self._separation = float(separation)
         self._refresh_gcp_table()
         self.refit()
 
@@ -305,16 +293,6 @@ class GcpPickerWidget(QWidget):
             )
         self.notesChanged.emit(message)
 
-        # Only an ellipsoidal file can measure the gap between the datums, and
-        # the gap is worth having either way -- it carries the points across
-        # when the drawing is orthometric, and the SU altitudes across when it
-        # is ellipsoidal. Offered, not applied: a section that is already drawn
-        # is stuck with the gap it was drawn on.
-        if points and points[0].datum is HeightDatum.ELLIPSOIDAL:
-            guess = suggest_separation(points)
-            if guess:
-                self.separationSuggested.emit(guess)
-
         self._refresh_gcp_table()
         self.refit()
 
@@ -324,8 +302,6 @@ class GcpPickerWidget(QWidget):
         table = self.gcp_table
         table.blockSignals(True)
         table.setRowCount(len(self.control_points))
-        sep = self._separation
-        datum = self._datum
         for row, p in enumerate(self.control_points):
             check = QTableWidgetItem()
             check.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled | Qt.ItemIsSelectable)
@@ -333,7 +309,7 @@ class GcpPickerWidget(QWidget):
             check.setData(Qt.UserRole, row)
             table.setItem(row, 0, check)
             table.setItem(row, 1, QTableWidgetItem(p.name))
-            table.setItem(row, 2, QTableWidgetItem(f"{p.height_in(datum, sep):.3f}"))
+            table.setItem(row, 2, QTableWidgetItem(f"{p.height:.3f}"))
             off = p.offset_from(self.line)
             off_item = QTableWidgetItem(f"{off*100:+.1f} cm")
             if abs(off) > self.line.buffer * 0.75:
@@ -441,11 +417,9 @@ class GcpPickerWidget(QWidget):
         try:
             self.fit = fit_transform(
                 self.control_points, self.line,
-                separation=self._separation,
                 image_height=self.image_size[1],
                 image_width=self.image_size[0],
                 model=chosen,
-                datum=self._datum,
             )
         except Exception as exc:
             self._fail(str(exc))
@@ -511,7 +485,7 @@ class RelinkPhotoDialog(QDialog):
 
     For sections drawn before the placement was recorded, where there is nothing
     to re-place the photograph with. Everything about the section itself is
-    fixed and shown read-only: the trace, the flip, the datum and the gap are
+    fixed and shown read-only: the trace, the flip and the vertical extent are
     all baked into polygons that already exist, and the whole point of picking
     again is to move the *photo* onto the drawing, not the drawing onto the
     photo.
@@ -544,16 +518,6 @@ class RelinkPhotoDialog(QDialog):
             "under the units you have already drawn."
         )
 
-        datum = HeightDatum(getattr(session.line, "height_datum", None)
-                            or DEFAULT_WORKING_DATUM.value)
-        separation = float(getattr(session, "photo_separation", 0.0) or 0.0)
-        fixed = QLabel(
-            f"Heights are <b>{datum.value}</b>, gap <b>{separation:.3f} m</b> - "
-            "fixed, because the units are already drawn against them."
-        )
-        fixed.setWordWrap(True)
-        fixed.setStyleSheet("color: grey; font-size: 10px;")
-        self.picker.extra_layout.addWidget(fixed)
         layout.addWidget(self.picker, 1)
 
         self.note = QLabel()
@@ -574,7 +538,6 @@ class RelinkPhotoDialog(QDialog):
         self.picker.fitChanged.connect(lambda _fit: self._update_ok_state())
         self.picker.notesChanged.connect(self.note.setText)
 
-        self.picker.set_datum(datum, separation)
         # Whatever was picked last time, so a section being re-linked to the
         # same photograph only needs the points confirmed, not re-clicked.
         points = list(getattr(session, "photo_points", []) or [])
